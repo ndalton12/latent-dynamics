@@ -1,0 +1,37 @@
+{
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.cache": true,
+        "**/.pytest_cache": true,
+        "**/node_modules": true,
+        "**/.git": true,
+        "**/.DS_Store": true,
+        "**/.ruff_cache": true,
+        "**/.venv": true,
+        "**/*.egg-info": true,
+        "**/.mypy_cache": true,
+    },
+    "search.exclude": {
+        "**/__pycache__": true,
+        "**/.cache": true,
+        "**/.pytest_cache": true,
+        "**/node_modules": true,
+        "**/.git": true,
+        "**/.ruff_cache": true,
+        "**/.venv": true,
+        "**/*.egg-info": true,
+        "**/.mypy_cache": true,
+    },
+    "[python]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "always",
+            "source.organizeImports.ruff": "always"
+        }
+    },
+    "ruff.path": [
+        "uvx",
+        "ruff"
+    ]
+}
