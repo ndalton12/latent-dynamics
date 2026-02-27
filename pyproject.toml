@@ -7,7 +7,16 @@ authors = [
     { name = "ndalton12", email = "niall.dalton12@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "accelerate>=1.12.0",
+    "bitsandbytes>=0.49.2",
+    "datasets>=4.6.0",
+    "jupyter>=1.1.1",
+    "plotly>=6.5.2",
+    "sae-lens>=6.37.5",
+    "scikit-learn>=1.8.0",
+    "transformers>=5.2.0",
+]
 
 [build-system]
 requires = ["hatchling"]
