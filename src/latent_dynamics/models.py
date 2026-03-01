@@ -36,7 +36,7 @@ def load_model_and_tokenizer(
 
     model = AutoModelForCausalLM.from_pretrained(
         hf_id,
-        torch_dtype=dtype,
+        dtype=dtype,
         low_cpu_mem_usage=True,
     )
     model.eval()

@@ -1279,8 +1279,10 @@ dependencies = [
     { name = "jupyter" },
     { name = "plotly" },
     { name = "sae-lens" },
+    { name = "safetensors" },
     { name = "scikit-learn" },
     { name = "transformers" },
+    { name = "typer" },
 ]
 
 [package.metadata]
@@ -1291,8 +1293,10 @@ requires-dist = [
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "plotly", specifier = ">=6.5.2" },
     { name = "sae-lens", specifier = ">=6.37.5" },
+    { name = "safetensors", specifier = ">=0.5.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "transformers", specifier = ">=5.2.0" },
+    { name = "typer", specifier = ">=0.15.0" },
 ]
 
 [[package]]
