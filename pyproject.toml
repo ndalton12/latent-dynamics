@@ -13,10 +13,15 @@ dependencies = [
     "datasets>=4.6.0",
     "jupyter>=1.1.1",
     "plotly>=6.5.2",
+    "safetensors>=0.5.0",
     "sae-lens>=6.37.5",
     "scikit-learn>=1.8.0",
     "transformers>=5.2.0",
+    "typer>=0.15.0",
 ]
+
+[project.scripts]
+latent-dynamics = "latent_dynamics.cli:app"
 
 [build-system]
 requires = ["hatchling"]
