@@ -13,6 +13,16 @@ TRAJECTORIES_FILE = "trajectories.safetensors"
 METADATA_FILE = "metadata.json"
 
 
+def activation_subpath(
+    dataset_key: str,
+    split: str,
+    model_key: str,
+    layer_idx: int,
+) -> Path:
+    """Canonical relative path: ``{dataset}/{split}/{model}/layer_{N}``."""
+    return Path(dataset_key) / split / model_key / f"layer_{layer_idx}"
+
+
 def save_activations(
     output_dir: Path,
     trajectories: list[np.ndarray],
@@ -63,7 +73,11 @@ def load_activations(
     return trajectories, texts, labels, token_texts, cfg
 
 
-def push_to_hub(local_dir: Path, repo_id: str) -> str:
+def push_to_hub(
+    local_dir: Path,
+    repo_id: str,
+    path_in_repo: str | None = None,
+) -> str:
     from huggingface_hub import HfApi
 
     api = HfApi()
@@ -72,16 +86,37 @@ def push_to_hub(local_dir: Path, repo_id: str) -> str:
         folder_path=str(local_dir),
         repo_id=repo_id,
         repo_type="dataset",
+        path_in_repo=path_in_repo or "",
     )
     return f"https://huggingface.co/datasets/{repo_id}"
 
 
-def pull_from_hub(repo_id: str, local_dir: Path) -> Path:
-    from huggingface_hub import snapshot_download
+def pull_from_hub(
+    repo_id: str,
+    local_dir: Path,
+    path_in_repo: str | None = None,
+) -> Path:
+    from huggingface_hub import HfApi
 
-    snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        local_dir=str(local_dir),
-    )
+    api = HfApi()
+    if path_in_repo:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        for info in api.list_repo_tree(
+            repo_id, repo_type="dataset", path_in_repo=path_in_repo
+        ):
+            if hasattr(info, "rfilename"):
+                api.hf_hub_download(
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    filename=info.rfilename,
+                    local_dir=str(local_dir),
+                )
+    else:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            local_dir=str(local_dir),
+        )
     return local_dir

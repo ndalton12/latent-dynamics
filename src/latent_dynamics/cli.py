@@ -48,13 +48,16 @@ def extract(
         DatasetKey, typer.Option(help="Dataset key from registry.")
     ] = DatasetKey.toy_contrastive,
     split: Annotated[str, typer.Option(help="Dataset split.")] = "train",
-    layer: Annotated[int, typer.Option(help="Hidden layer index for activations.")] = 5,
+    layer: Annotated[
+        Optional[list[int]],
+        typer.Option(help="Layer index (repeat for multiple: --layer 5 --layer 10)."),
+    ] = None,
     max_samples: Annotated[int, typer.Option(help="Maximum number of examples.")] = 120,
     max_length: Annotated[
         int, typer.Option(help="Maximum token sequence length.")
     ] = 256,
     output: Annotated[
-        Path, typer.Option(help="Output directory for activations.")
+        Path, typer.Option(help="Root output directory. Activations are saved under {dataset}/{split}/{model}/layer_{N}/.")
     ] = Path("./activations"),
     push_to_hub: Annotated[
         Optional[str], typer.Option(help="HuggingFace Hub repo id (e.g. user/repo).")
@@ -76,13 +79,23 @@ def extract(
         ),
     ] = True,
 ) -> None:
-    """Extract hidden-state trajectories from a model and dataset, save to disk."""
-    from latent_dynamics.activations import extract_hidden_trajectories
+    """Extract hidden-state trajectories from a model and dataset, save to disk.
+
+    Activations are stored under a structured path:
+      {output}/{dataset}/{split}/{model}/layer_{N}/
+    This layout is mirrored when pushing to HuggingFace Hub.
+    """
+    from latent_dynamics.activations import extract_multi_layer_trajectories
     from latent_dynamics.config import RunConfig
     from latent_dynamics.data import load_examples, prepare_text_and_labels
-    from latent_dynamics.hub import push_to_hub as _push
-    from latent_dynamics.hub import save_activations
+    from latent_dynamics.hub import (
+        activation_subpath,
+        push_to_hub as _push,
+        save_activations,
+    )
     from latent_dynamics.models import load_model_and_tokenizer, resolve_device
+
+    layer_indices = layer if layer else [5]
 
     cfg = RunConfig(
         model_key=model.value,
@@ -90,7 +103,7 @@ def extract(
         split=split,
         max_samples=max_samples,
         max_length=max_length,
-        layer_idx=layer,
+        layer_idx=layer_indices[0],
         device=resolve_device(device),
         use_generate=use_generate,
         max_new_tokens=max_new_tokens,
@@ -102,6 +115,7 @@ def extract(
     typer.echo(
         f"Dataset: {cfg.dataset_key} (split={cfg.split}, max_samples={cfg.max_samples})"
     )
+    typer.echo(f"Layers:  {layer_indices}")
 
     ds, spec = load_examples(cfg.dataset_key, cfg.split, cfg.max_samples)
     texts, labels = prepare_text_and_labels(
@@ -120,20 +134,22 @@ def extract(
     typer.echo(f"Loaded {len(texts)} examples, loading model...")
     mdl, tokenizer = load_model_and_tokenizer(cfg.model_key, cfg.device)
 
-    typer.echo(f"Extracting trajectories at layer {cfg.layer_idx}...")
-    trajectories, token_texts = extract_hidden_trajectories(
-        mdl,
-        tokenizer,
-        texts,
-        layer_idx=cfg.layer_idx,
+    typer.echo(f"Extracting trajectories for layers {layer_indices} (single forward pass)...")
+    per_layer, token_texts = extract_multi_layer_trajectories(
+        mdl, tokenizer, texts,
+        layer_indices=layer_indices,
         max_length=cfg.max_length,
         device=cfg.device,
         cfg=cfg,
     )
-    typer.echo(f"Extracted {len(trajectories)} trajectories.")
+    typer.echo(f"Extracted {len(texts)} trajectories x {len(layer_indices)} layers.")
 
-    save_activations(output, trajectories, texts, labels, token_texts, cfg)
-    typer.echo(f"Saved to {output}")
+    for li in layer_indices:
+        sub = activation_subpath(cfg.dataset_key, cfg.split, cfg.model_key, li)
+        layer_dir = output / sub
+        layer_cfg = RunConfig(**{**cfg.__dict__, "layer_idx": li})
+        save_activations(layer_dir, per_layer[li], texts, labels, token_texts, layer_cfg)
+        typer.echo(f"  Saved layer {li} -> {layer_dir}")
 
     if push_to_hub:
         url = _push(output, push_to_hub)
@@ -143,11 +159,28 @@ def extract(
 @app.command()
 def analyze(
     activations: Annotated[
-        Optional[Path], typer.Option(help="Local activations directory.")
+        Optional[Path],
+        typer.Option(help="Local activations directory (leaf path with metadata.json)."),
     ] = None,
     from_hub: Annotated[
         Optional[str],
         typer.Option(help="HuggingFace Hub repo id to pull activations from."),
+    ] = None,
+    hub_dataset: Annotated[
+        Optional[str],
+        typer.Option(help="Dataset key for Hub path resolution (with --from-hub)."),
+    ] = None,
+    hub_model: Annotated[
+        Optional[str],
+        typer.Option(help="Model key for Hub path resolution (with --from-hub)."),
+    ] = None,
+    hub_split: Annotated[
+        Optional[str],
+        typer.Option(help="Split for Hub path resolution (with --from-hub)."),
+    ] = None,
+    hub_layer: Annotated[
+        Optional[int],
+        typer.Option(help="Layer index for Hub path resolution (with --from-hub)."),
     ] = None,
     direction: Annotated[
         DirectionMethod, typer.Option(help="Direction method for LAT scan.")
@@ -172,7 +205,12 @@ def analyze(
     max_traces: Annotated[int, typer.Option(help="Max traces in each plot.")] = 16,
     random_state: Annotated[int, typer.Option(help="Random seed.")] = 7,
 ) -> None:
-    """Analyze stored activation trajectories: train probe, LAT scan, visualize."""
+    """Analyze stored activation trajectories: train probe, LAT scan, visualize.
+
+    Use --activations to point to a local leaf directory, or --from-hub with
+    --hub-dataset, --hub-model, --hub-split, --hub-layer to pull a specific
+    slice from HuggingFace Hub.
+    """
     from latent_dynamics.activations import build_feature_matrix
     from latent_dynamics.analysis import (
         drift_curve,
@@ -181,7 +219,11 @@ def analyze(
         make_direction,
         train_linear_probe,
     )
-    from latent_dynamics.hub import load_activations, pull_from_hub
+    from latent_dynamics.hub import (
+        activation_subpath,
+        load_activations,
+        pull_from_hub,
+    )
     from latent_dynamics.viz import plot_drift_curves, plot_lat_scans
 
     if activations is None and from_hub is None:
@@ -189,13 +231,26 @@ def analyze(
         raise typer.Exit(code=1)
 
     if from_hub and activations is None:
-        activations = Path(f".cache/hub/{from_hub.replace('/', '__')}")
-        typer.echo(f"Pulling from Hub: {from_hub} -> {activations}")
-        pull_from_hub(from_hub, activations)
+        for name, val in [
+            ("--hub-dataset", hub_dataset),
+            ("--hub-model", hub_model),
+            ("--hub-split", hub_split),
+            ("--hub-layer", hub_layer),
+        ]:
+            if val is None:
+                typer.echo(f"{name} is required when using --from-hub.", err=True)
+                raise typer.Exit(code=1)
+
+        assert hub_dataset and hub_model and hub_split and hub_layer is not None
+        sub = activation_subpath(hub_dataset, hub_split, hub_model, hub_layer)
+        activations = Path(f".cache/hub/{from_hub.replace('/', '__')}") / sub
+        typer.echo(f"Pulling from Hub: {from_hub} / {sub}")
+        pull_from_hub(from_hub, activations, path_in_repo=str(sub))
 
     assert activations is not None
     trajectories, texts, labels, token_texts, cfg = load_activations(activations)
     typer.echo(f"Loaded {len(trajectories)} trajectories from {activations}")
+    typer.echo(f"  model={cfg.model_key}  dataset={cfg.dataset_key}  layer={cfg.layer_idx}")
 
     if labels is None:
         typer.echo(
@@ -222,7 +277,7 @@ def analyze(
         scans,
         labels,
         max_traces=max_traces,
-        title=f"LAT scan — {cfg.model_key} / {cfg.dataset_key} / {direction.value}",
+        title=f"LAT scan — {cfg.model_key} / {cfg.dataset_key} / L{cfg.layer_idx} / {direction.value}",
         save_path=scan_path,
     )
     if save_plots:
@@ -245,7 +300,7 @@ def analyze(
             labels,
             tau,
             max_traces=max_traces,
-            title=f"Trust-region drift — {cfg.model_key} / {cfg.dataset_key}",
+            title=f"Trust-region drift — {cfg.model_key} / {cfg.dataset_key} / L{cfg.layer_idx}",
             save_path=drift_path,
         )
         if save_plots:

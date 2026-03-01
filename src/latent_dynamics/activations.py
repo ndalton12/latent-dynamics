@@ -40,16 +40,17 @@ def generate_full_sequence(
     return only_new
 
 
-def extract_hidden_trajectories(
+def extract_multi_layer_trajectories(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     texts: list[str],
-    layer_idx: int,
+    layer_indices: list[int],
     max_length: int,
     device: str,
     cfg: RunConfig,
-) -> tuple[list[np.ndarray], list[list[str]]]:
-    trajectories: list[np.ndarray] = []
+) -> tuple[dict[int, list[np.ndarray]], list[list[str]]]:
+    """Single forward pass per example, collecting trajectories for all requested layers."""
+    per_layer: dict[int, list[np.ndarray]] = {li: [] for li in layer_indices}
     token_texts: list[list[str]] = []
 
     for text in texts:
@@ -65,11 +66,7 @@ def extract_hidden_trajectories(
         with torch.no_grad():
             if cfg.use_generate:
                 seq_ids = generate_full_sequence(
-                    model,
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    cfg=cfg,
-                    tokenizer=tokenizer,
+                    model, input_ids, attention_mask, cfg, tokenizer,
                 )
                 seq_attn = torch.ones_like(seq_ids, device=device)
                 out = model(
@@ -77,24 +74,41 @@ def extract_hidden_trajectories(
                     attention_mask=seq_attn,
                     output_hidden_states=True,
                 )
-                hs = out.hidden_states[layer_idx][0]
                 ids = seq_ids[0].cpu().tolist()
+                for li in layer_indices:
+                    hs = out.hidden_states[li][0].float().cpu().numpy()
+                    per_layer[li].append(hs)
             else:
                 out = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     output_hidden_states=True,
                 )
-                hs = out.hidden_states[layer_idx][0]
                 attn = attention_mask[0].bool()
-                hs = hs[attn]
                 ids = input_ids[0][attn].cpu().tolist()
+                for li in layer_indices:
+                    hs = out.hidden_states[li][0][attn].float().cpu().numpy()
+                    per_layer[li].append(hs)
 
-        hs = hs.float().cpu().numpy()
-        trajectories.append(hs)
         token_texts.append(tokenizer.convert_ids_to_tokens(ids))
 
-    return trajectories, token_texts
+    return per_layer, token_texts
+
+
+def extract_hidden_trajectories(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    texts: list[str],
+    layer_idx: int,
+    max_length: int,
+    device: str,
+    cfg: RunConfig,
+) -> tuple[list[np.ndarray], list[list[str]]]:
+    """Convenience wrapper for a single layer."""
+    per_layer, token_texts = extract_multi_layer_trajectories(
+        model, tokenizer, texts, [layer_idx], max_length, device, cfg,
+    )
+    return per_layer[layer_idx], token_texts
 
 
 def pool_trajectory(traj: np.ndarray, mode: str = "last") -> np.ndarray:
