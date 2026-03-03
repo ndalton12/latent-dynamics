@@ -40,6 +40,10 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "hf_id": "google/gemma-3-4b-it",
         "dtype": "bfloat16",
     },
+    "gemma3_270m": {
+        "hf_id": "google/gemma-3-270m-it",
+        "dtype": "bfloat16",
+    },  # small model for dev purposes
 }
 
 # Default layer indices when not specified (plan: Llama 20, Qwen3 24, Gemma 18).
