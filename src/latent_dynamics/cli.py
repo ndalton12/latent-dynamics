@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
@@ -314,6 +315,81 @@ def analyze(
             typer.echo(f"Saved drift plot to {drift_path}.html")
         else:
             fig_drift.show()
+
+
+@app.command("qd-active")
+def qd_active(
+    model: Annotated[
+        ModelKey, typer.Option(help="Target model key for rollout latent extraction.")
+    ] = ModelKey.gemma3_4b,
+    layer: Annotated[int, typer.Option(help="Layer index for latent trajectories.")] = 5,
+    label_budget: Annotated[int, typer.Option(help="Total labeling budget.")] = 1000,
+    warm_start_labels: Annotated[
+        int, typer.Option(help="Initial labeled pool size before active learning.")
+    ] = 128,
+    batch_size: Annotated[int, typer.Option(help="Labels acquired per iteration.")] = 32,
+    candidate_pool_size: Annotated[
+        int, typer.Option(help="Candidate prompts generated per iteration.")
+    ] = 128,
+    rollout_batch_size: Annotated[
+        int, typer.Option(help="Prompt rollout extraction batch size.")
+    ] = 16,
+    proxy_model: Annotated[
+        str, typer.Option(help="Proxy model used by flashlite for mutation/judging.")
+    ] = "gpt-5-mini",
+    proxy_batch_size: Annotated[
+        int, typer.Option(help="flashlite request batch size per complete_many call.")
+    ] = 32,
+    template_dir: Annotated[
+        Optional[Path],
+        typer.Option(help="Optional flashlite Jinja template directory override."),
+    ] = None,
+    output_root: Annotated[
+        Path, typer.Option(help="Directory root for run artifacts.")
+    ] = Path(".cache/qd_active"),
+    output_json: Annotated[
+        Optional[Path], typer.Option(help="Optional path to write final JSON report.")
+    ] = None,
+    device: Annotated[
+        Optional[str], typer.Option(help="Device override (cuda/mps/cpu).")
+    ] = None,
+    show_progress: Annotated[
+        bool,
+        typer.Option(
+            "--progress/--no-progress",
+            help="Enable or disable tqdm progress bars.",
+        ),
+    ] = True,
+    random_state: Annotated[int, typer.Option(help="Random seed.")] = 7,
+) -> None:
+    """Run QD-driven active boundary learning with Bayesian logistic probes."""
+    from latent_dynamics.experiments.qd_active_boundary_experiment import (
+        ExperimentConfig,
+        run_experiment,
+    )
+
+    cfg = ExperimentConfig(
+        model_key=model.value,
+        layer_idx=layer,
+        label_budget=label_budget,
+        warm_start_labels=warm_start_labels,
+        batch_size=batch_size,
+        candidate_pool_size=candidate_pool_size,
+        rollout_batch_size=rollout_batch_size,
+        proxy_model=proxy_model,
+        proxy_batch_size=proxy_batch_size,
+        template_dir=template_dir,
+        output_root=output_root,
+        output_json=output_json,
+        device=device,
+        show_progress=show_progress,
+        random_state=random_state,
+    )
+    report = run_experiment(cfg)
+    text = json.dumps(report, indent=2, default=str)
+    typer.echo(text)
+    if output_json is not None:
+        typer.echo(f"Wrote report to {output_json}")
 
 
 @app.command()

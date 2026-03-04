@@ -56,6 +56,7 @@ class BenchmarkConfig:
     churn_dictionary_dim: int = 1024
     churn_top_k: int = 32
     linear_koopman_dim: int = 64
+    qd_report_json: Path | None = None
     output_json: Path | None = None
 
 
@@ -67,7 +68,9 @@ def _parse_args() -> BenchmarkConfig:
         ),
     )
     parser.add_argument("--activations-root", type=Path, default=None)
-    parser.add_argument("--model-key", choices=sorted(MODEL_REGISTRY.keys()), default="gemma3_4b")
+    parser.add_argument(
+        "--model-key", choices=sorted(MODEL_REGISTRY.keys()), default="gemma3_4b"
+    )
     parser.add_argument("--dataset-key", default="toy_contrastive")
     parser.add_argument("--split", default="train")
     parser.add_argument("--layers", type=int, nargs="+", default=[5])
@@ -87,6 +90,7 @@ def _parse_args() -> BenchmarkConfig:
     parser.add_argument("--churn-dictionary-dim", type=int, default=1024)
     parser.add_argument("--churn-top-k", type=int, default=32)
     parser.add_argument("--linear-koopman-dim", type=int, default=64)
+    parser.add_argument("--qd-report-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     args = parser.parse_args()
 
@@ -112,6 +116,7 @@ def _parse_args() -> BenchmarkConfig:
         churn_dictionary_dim=args.churn_dictionary_dim,
         churn_top_k=args.churn_top_k,
         linear_koopman_dim=args.linear_koopman_dim,
+        qd_report_json=args.qd_report_json,
         output_json=args.output_json,
     )
 
@@ -155,8 +160,8 @@ def _split_indices(
         n_train = min(max(1, n_train), n - 2)
         n_calib = min(max(1, n_calib), n - n_train - 1)
         train_idx = perm[:n_train]
-        calib_idx = perm[n_train:n_train + n_calib]
-        heldout_idx = perm[n_train + n_calib:]
+        calib_idx = perm[n_train : n_train + n_calib]
+        heldout_idx = perm[n_train + n_calib :]
     return np.sort(train_idx), np.sort(calib_idx), np.sort(heldout_idx)
 
 
@@ -254,11 +259,14 @@ def _evaluate_detection(
             continue
         y = np.array([labels[i] for i in valid], dtype=np.int64)
         pred = np.array(
-            [1 if (first_hit[i] is not None and first_hit[i] <= p) else 0 for i in valid],
+            [
+                1 if (first_hit[i] is not None and first_hit[i] <= p) else 0
+                for i in valid
+            ],
             dtype=np.int64,
         )
-        safe_mask = (y == 0)
-        unsafe_mask = (y == 1)
+        safe_mask = y == 0
+        unsafe_mask = y == 1
         fpr = float(pred[safe_mask].mean()) if np.any(safe_mask) else float("nan")
         tpr = float(pred[unsafe_mask].mean()) if np.any(unsafe_mask) else float("nan")
         f1 = _binary_f1(y, pred)
@@ -298,7 +306,9 @@ def _evaluate_detection(
             float(len(safe_hits) / len(safe_idxs)) if safe_idxs else None
         ),
         "median_first_detect_prefix_unsafe": (
-            float(np.median(np.array(unsafe_hits, dtype=np.float32))) if unsafe_hits else None
+            float(np.median(np.array(unsafe_hits, dtype=np.float32)))
+            if unsafe_hits
+            else None
         ),
         "final_prefix_auroc": auroc,
         "f1_at_max_prefix": f1_at_max_prefix,
@@ -308,7 +318,9 @@ def _evaluate_detection(
     }
 
 
-def _summary_from_prefix_stats(prefix_stats: dict[str, Any], fpr_target: float) -> dict[str, Any]:
+def _summary_from_prefix_stats(
+    prefix_stats: dict[str, Any], fpr_target: float
+) -> dict[str, Any]:
     per_prefix = prefix_stats.get("per_prefix", [])
     tpr_at_target: float | None = None
     prefix_at_target: float | None = None
@@ -328,12 +340,46 @@ def _summary_from_prefix_stats(prefix_stats: dict[str, Any], fpr_target: float) 
         "best_f1_prefix": prefix_stats.get("best_f1_prefix"),
         "f1_at_max_prefix": prefix_stats.get("f1_at_max_prefix"),
         "detected_unsafe_fraction": prefix_stats.get("detected_unsafe_fraction"),
-        "false_positive_safe_fraction": prefix_stats.get("false_positive_safe_fraction"),
-        "median_first_detect_prefix_unsafe": prefix_stats.get("median_first_detect_prefix_unsafe"),
+        "false_positive_safe_fraction": prefix_stats.get(
+            "false_positive_safe_fraction"
+        ),
+        "median_first_detect_prefix_unsafe": prefix_stats.get(
+            "median_first_detect_prefix_unsafe"
+        ),
         "final_prefix_auroc": prefix_stats.get("final_prefix_auroc"),
         "tpr_at_fpr_target": tpr_at_target,
         "prefix_at_fpr_target": prefix_at_target,
         "fpr_target": fpr_target,
+    }
+
+
+def _load_external_qd_summary(path: Path | None, fpr_target: float) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    if not path.exists():
+        raise FileNotFoundError(f"--qd-report-json not found: {path}")
+
+    payload = json.loads(path.read_text())
+    strategies = payload.get("evaluation", {}).get("strategies", {})
+    qd = strategies.get("qd_uncertainty")
+    if not isinstance(qd, dict):
+        return None
+
+    return {
+        "best_f1": None,
+        "best_f1_prefix": None,
+        "f1_at_max_prefix": None,
+        "detected_unsafe_fraction": None,
+        "false_positive_safe_fraction": None,
+        "median_first_detect_prefix_unsafe": None,
+        "final_prefix_auroc": qd.get("heldout_auroc"),
+        "tpr_at_fpr_target": None,
+        "prefix_at_fpr_target": None,
+        "fpr_target": fpr_target,
+        "external_source": str(path),
+        "heldout_brier": qd.get("heldout_brier"),
+        "heldout_ece": qd.get("heldout_ece"),
+        "uncertainty_mass_near_boundary": qd.get("uncertainty_mass_near_boundary"),
     }
 
 
@@ -363,11 +409,18 @@ def _lr_prefix_score_map(
         y = np.array([labels[i] for i in fit_ids], dtype=np.int64)
         if len(np.unique(y)) < 2:
             break
-        X = np.stack([_prefix_feature(trajectories[i], p, mode) for i in fit_ids], axis=0)
+        X = np.stack(
+            [_prefix_feature(trajectories[i], p, mode) for i in fit_ids], axis=0
+        )
         clf = Pipeline(
             [
                 ("scaler", StandardScaler()),
-                ("clf", LogisticRegression(max_iter=2000, class_weight="balanced", random_state=seed)),
+                (
+                    "clf",
+                    LogisticRegression(
+                        max_iter=2000, class_weight="balanced", random_state=seed
+                    ),
+                ),
             ]
         )
         clf.fit(X, y)
@@ -398,7 +451,9 @@ def _delta_norm_score_map(
         x = (traj.astype(np.float32) - mean) / std
         d = np.diff(x, axis=0)
         step = np.linalg.norm(d, axis=1) / np.sqrt(float(d.shape[1]))
-        out[i] = (np.cumsum(step) / np.arange(1, len(step) + 1, dtype=np.float32)).astype(np.float32)
+        out[i] = (
+            np.cumsum(step) / np.arange(1, len(step) + 1, dtype=np.float32)
+        ).astype(np.float32)
     return out
 
 
@@ -413,9 +468,13 @@ def _linear_koopman_score_map(
 ) -> dict[int, np.ndarray]:
     fit_idx = [int(i) for i in train_idx if (labels[int(i)] == 0 or not safe_only)]
     if len(fit_idx) < 2:
-        raise ValueError("Need at least 2 fit trajectories for linear Koopman baseline.")
+        raise ValueError(
+            "Need at least 2 fit trajectories for linear Koopman baseline."
+        )
 
-    train_states = np.concatenate([trajectories[i] for i in fit_idx], axis=0).astype(np.float32)
+    train_states = np.concatenate([trajectories[i] for i in fit_idx], axis=0).astype(
+        np.float32
+    )
     max_rank = int(min(train_states.shape[0], train_states.shape[1]))
     eff_dim = int(min(dim, max_rank))
     pca = PCA(n_components=eff_dim, random_state=seed)
@@ -444,7 +503,9 @@ def _linear_koopman_score_map(
             continue
         pred = z[:-1] @ w
         resid = np.linalg.norm(z[1:] - pred, axis=1) / np.sqrt(float(eff_dim))
-        score_map[i] = (np.cumsum(resid) / np.arange(1, len(resid) + 1, dtype=np.float32)).astype(np.float32)
+        score_map[i] = (
+            np.cumsum(resid) / np.arange(1, len(resid) + 1, dtype=np.float32)
+        ).astype(np.float32)
     return score_map
 
 
@@ -452,13 +513,15 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
     layers = cfg.layers if cfg.layers is not None else [5]
     if cfg.activations_root is not None:
         paths = {
-            li: cfg.activations_root / activation_subpath(cfg.dataset_key, cfg.split, cfg.model_key, li)
+            li: cfg.activations_root
+            / activation_subpath(cfg.dataset_key, cfg.split, cfg.model_key, li)
             for li in layers
         }
         missing = [str(p) for p in paths.values() if not p.exists()]
         if missing:
             raise FileNotFoundError(
-                "Missing activation directories under --activations-root:\n" + "\n".join(missing)
+                "Missing activation directories under --activations-root:\n"
+                + "\n".join(missing)
             )
         return paths
 
@@ -485,7 +548,9 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
     if labels is None:
         raise ValueError("Dataset must provide labels for this benchmark.")
 
-    model, tokenizer = load_model_and_tokenizer(run_cfg.model_key, run_cfg.device or "cpu")
+    model, tokenizer = load_model_and_tokenizer(
+        run_cfg.model_key, run_cfg.device or "cpu"
+    )
     per_layer, token_texts = extract_multi_layer_trajectories(
         model=model,
         tokenizer=tokenizer,
@@ -515,16 +580,28 @@ def _run_baseline_family(
     seed: int,
     linear_koopman_dim: int,
 ) -> dict[str, dict[str, Any]]:
-    train_states = np.concatenate([trajectories[int(i)] for i in train_idx], axis=0).astype(np.float32)
+    train_states = np.concatenate(
+        [trajectories[int(i)] for i in train_idx], axis=0
+    ).astype(np.float32)
     mean = train_states.mean(axis=0).astype(np.float32)
     std = (train_states.std(axis=0) + 1e-6).astype(np.float32)
 
     methods: dict[str, dict[int, np.ndarray]] = {
         "baseline_prefix_mean_lr": _lr_prefix_score_map(
-            trajectories, labels, train_idx, max_prefix, mode="mean", seed=seed,
+            trajectories,
+            labels,
+            train_idx,
+            max_prefix,
+            mode="mean",
+            seed=seed,
         ),
         "baseline_prefix_last_lr": _lr_prefix_score_map(
-            trajectories, labels, train_idx, max_prefix, mode="last", seed=seed,
+            trajectories,
+            labels,
+            train_idx,
+            max_prefix,
+            mode="last",
+            seed=seed,
         ),
         "baseline_delta_norm": _delta_norm_score_map(trajectories, mean=mean, std=std),
         "linear_koopman_conformal": _linear_koopman_score_map(
@@ -573,10 +650,13 @@ def run_benchmark(cfg: BenchmarkConfig) -> dict[str, Any]:
     layers = cfg.layers if cfg.layers is not None else [5]
     seeds = cfg.seeds if cfg.seeds is not None else [7, 11, 19]
     layer_paths = _ensure_layer_paths(cfg)
+    external_qd_summary = _load_external_qd_summary(cfg.qd_report_json, cfg.fpr_target)
 
     runs: list[dict[str, Any]] = []
     for li in layers:
-        trajectories, _texts, labels, _tokens, source_cfg = load_activations(layer_paths[li])
+        trajectories, _texts, labels, _tokens, source_cfg = load_activations(
+            layer_paths[li]
+        )
         if labels is None or len(np.unique(labels)) < 2:
             raise ValueError(
                 f"Layer {li} has missing/single-class labels; cannot benchmark prefix detectors."
@@ -640,11 +720,19 @@ def run_benchmark(cfg: BenchmarkConfig) -> dict[str, Any]:
                 "prefix_stats_calib": c_res["prefix_stats_calib"],
                 "prefix_stats_heldout": c_res["prefix_stats_heldout"],
             }
+            if external_qd_summary is not None:
+                methods["qd_active_boundary_external"] = {
+                    "summary": external_qd_summary,
+                }
 
-            summary = {
-                name: _summary_from_prefix_stats(m["prefix_stats_heldout"], cfg.fpr_target)
-                for name, m in methods.items()
-            }
+            summary: dict[str, Any] = {}
+            for name, m in methods.items():
+                if "prefix_stats_heldout" in m:
+                    summary[name] = _summary_from_prefix_stats(
+                        m["prefix_stats_heldout"], cfg.fpr_target
+                    )
+                elif "summary" in m:
+                    summary[name] = m["summary"]
             runs.append(
                 {
                     "layer": li,
@@ -663,13 +751,27 @@ def run_benchmark(cfg: BenchmarkConfig) -> dict[str, Any]:
     method_names = sorted({m for r in runs for m in r["summary"].keys()})
     aggregate: dict[str, dict[str, float | None]] = {}
     for name in method_names:
-        vals_f1 = [r["summary"][name]["best_f1"] for r in runs if r["summary"][name]["best_f1"] is not None]
-        vals_tpr = [r["summary"][name]["tpr_at_fpr_target"] for r in runs if r["summary"][name]["tpr_at_fpr_target"] is not None]
-        vals_auroc = [r["summary"][name]["final_prefix_auroc"] for r in runs if r["summary"][name]["final_prefix_auroc"] is not None]
+        vals_f1 = [
+            r["summary"][name]["best_f1"]
+            for r in runs
+            if r["summary"][name]["best_f1"] is not None
+        ]
+        vals_tpr = [
+            r["summary"][name]["tpr_at_fpr_target"]
+            for r in runs
+            if r["summary"][name]["tpr_at_fpr_target"] is not None
+        ]
+        vals_auroc = [
+            r["summary"][name]["final_prefix_auroc"]
+            for r in runs
+            if r["summary"][name]["final_prefix_auroc"] is not None
+        ]
         aggregate[name] = {
             "mean_best_f1": float(np.mean(vals_f1)) if vals_f1 else None,
             "mean_tpr_at_fpr_target": float(np.mean(vals_tpr)) if vals_tpr else None,
-            "mean_final_prefix_auroc": float(np.mean(vals_auroc)) if vals_auroc else None,
+            "mean_final_prefix_auroc": float(np.mean(vals_auroc))
+            if vals_auroc
+            else None,
         }
 
     return {
