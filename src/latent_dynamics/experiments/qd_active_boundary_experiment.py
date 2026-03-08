@@ -5,7 +5,7 @@ import asyncio
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -75,18 +75,23 @@ class ExperimentConfig:
 
     alpha_uncertainty: float = 0.7
     alpha_novelty: float = 0.3
-    bd_dims: tuple[int, int, int] = (12, 12, 8)
+    bd_dims: tuple[int, int, int] = (10, 10, 6)
 
     logistic_c: float = 1.0
     logistic_max_iter: int = 2000
     pca_components: int = 8
     boundary_margin_epsilon: float = 0.5
+    target_auroc: float = 0.75
+    target_brier: float = 0.20
+    target_ece: float = 0.10
 
     page_hinkley_delta: float = 0.05
     page_hinkley_lambda: float = 5.0
 
     strategies: tuple[str, ...] = ("qd_uncertainty", "uncertainty_only", "random")
     random_state: int = 7
+    num_seeds: int = 1
+    seed_stride: int = 1
 
     output_root: Path = Path(".cache/qd_active")
     output_json: Path | None = None
@@ -128,6 +133,9 @@ class StrategyState:
     ) = None
     archive_cells_seen: set[tuple[int, int, int]] = field(default_factory=set)
     archive_coverage_history: list[float] = field(default_factory=list)
+    qd_elites: dict[tuple[int, int, int], tuple[str, float]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass
@@ -220,6 +228,16 @@ class BayesianLogisticProbe:
         var = np.clip(var, 0.0, None)
         kappa = 1.0 / np.sqrt(1.0 + (math.pi * var / 8.0))
         return _sigmoid(kappa * mu_aug)
+
+    def predict_logit_variance(self, X: np.ndarray) -> np.ndarray:
+        if not self.fitted_ or self.cov_ is None:
+            return np.full(X.shape[0], np.nan, dtype=np.float64)
+        Xs = self._standardize(X.astype(np.float64))
+        x_aug = np.concatenate(
+            [Xs, np.ones((Xs.shape[0], 1), dtype=np.float64)], axis=1
+        )
+        var = np.einsum("bi,ij,bj->b", x_aug, self.cov_, x_aug)
+        return np.clip(var, 0.0, None)
 
     def predictive_entropy(self, X: np.ndarray) -> np.ndarray:
         p = self.predict_proba(X)
@@ -397,12 +415,15 @@ def _parse_args() -> ExperimentConfig:
 
     parser.add_argument("--alpha-uncertainty", type=float, default=0.7)
     parser.add_argument("--alpha-novelty", type=float, default=0.3)
-    parser.add_argument("--bd-dims", type=int, nargs=3, default=[12, 12, 8])
+    parser.add_argument("--bd-dims", type=int, nargs=3, default=[10, 10, 6])
 
     parser.add_argument("--logistic-c", type=float, default=1.0)
     parser.add_argument("--logistic-max-iter", type=int, default=2000)
     parser.add_argument("--pca-components", type=int, default=8)
     parser.add_argument("--boundary-margin-epsilon", type=float, default=0.5)
+    parser.add_argument("--target-auroc", type=float, default=0.75)
+    parser.add_argument("--target-brier", type=float, default=0.20)
+    parser.add_argument("--target-ece", type=float, default=0.10)
 
     parser.add_argument(
         "--strategies",
@@ -410,6 +431,8 @@ def _parse_args() -> ExperimentConfig:
         default=["qd_uncertainty", "uncertainty_only", "random"],
     )
     parser.add_argument("--random-state", type=int, default=7)
+    parser.add_argument("--num-seeds", type=int, default=1)
+    parser.add_argument("--seed-stride", type=int, default=1)
 
     parser.add_argument("--output-root", type=Path, default=Path(".cache/qd_active"))
     parser.add_argument("--output-json", type=Path, default=None)
@@ -450,8 +473,13 @@ def _parse_args() -> ExperimentConfig:
         logistic_max_iter=args.logistic_max_iter,
         pca_components=args.pca_components,
         boundary_margin_epsilon=args.boundary_margin_epsilon,
+        target_auroc=args.target_auroc,
+        target_brier=args.target_brier,
+        target_ece=args.target_ece,
         strategies=tuple(args.strategies),
         random_state=args.random_state,
+        num_seeds=args.num_seeds,
+        seed_stride=args.seed_stride,
         output_root=args.output_root,
         output_json=args.output_json,
     )
@@ -868,19 +896,9 @@ def _project_pca(z: np.ndarray, pca: PCA | None, target_dim: int) -> np.ndarray:
 
 def _build_psi(
     z_query: np.ndarray,
-    z_prefix_mean: np.ndarray,
-    pca_proj: np.ndarray,
-    measures: tuple[float, float, float],
 ) -> np.ndarray:
-    return np.concatenate(
-        [
-            z_query.astype(np.float32),
-            z_prefix_mean.astype(np.float32),
-            pca_proj.astype(np.float32),
-            np.asarray(measures, dtype=np.float32),
-        ],
-        axis=0,
-    )
+    # Probe features are intentionally restricted to the query state only.
+    return z_query.astype(np.float32)
 
 
 def _select_query_states(
@@ -898,14 +916,14 @@ def _select_query_states(
         best_zq = traj[best_idx]
         best_zm = traj[:max_p].mean(axis=0)
         best_proj = _project_pca(best_zq, pca, cfg.pca_components)
-        best_psi = _build_psi(best_zq, best_zm, best_proj, cand.measures)
+        best_psi = _build_psi(best_zq)
 
         if probe.fitted_:
             for p in range(1, max_p + 1):
                 zq = traj[p - 1]
                 zm = traj[:p].mean(axis=0)
                 proj = _project_pca(zq, pca, cfg.pca_components)
-                psi = _build_psi(zq, zm, proj, cand.measures)
+                psi = _build_psi(zq)
                 ent = float(probe.predictive_entropy(psi.reshape(1, -1))[0])
                 if ent > best_entropy:
                     best_entropy = ent
@@ -1014,6 +1032,22 @@ def _cell_index(
     return idxs[0], idxs[1], idxs[2]
 
 
+def _archive_add_status(add_result: Any) -> int:
+    """Return first add status code (ribs: 0=not added, 1=improved, 2=new)."""
+    status_raw: Any | None = None
+    if isinstance(add_result, dict):
+        status_raw = add_result.get("status")
+    else:
+        status_raw = getattr(add_result, "status", None)
+
+    if status_raw is None:
+        return 0
+    arr = np.asarray(status_raw).reshape(-1)
+    if arr.size == 0:
+        return 0
+    return int(arr[0])
+
+
 def _select_candidates(
     candidates: list[Candidate],
     state: StrategyState,
@@ -1035,36 +1069,47 @@ def _select_candidates(
     if state.archive is None or state.archive_ranges is None:
         raise ValueError("QD strategy requires archive and ranges.")
 
-    by_cell: dict[tuple[int, int, int], list[Candidate]] = {}
+    improving_by_cell: dict[tuple[int, int, int], list[Candidate]] = {}
+    improving: list[Candidate] = []
     for i, cand in enumerate(candidates):
         measures = np.asarray(cand.measures, dtype=np.float32)
         solution = np.asarray([float(iteration_idx), float(i)], dtype=np.float32)
+        objective = float(cand.q_total)
         # ribs>=0.8 expects batched inputs for add().
-        state.archive.add(
+        add_result = state.archive.add(
             solution=solution.reshape(1, -1),
-            objective=np.asarray([float(cand.q_total)], dtype=np.float32),
+            objective=np.asarray([objective], dtype=np.float32),
             measures=measures.reshape(1, -1),
         )
-
         cell = _cell_index(cand.measures, cfg.bd_dims, state.archive_ranges)
-        state.archive_cells_seen.add(cell)
-        by_cell.setdefault(cell, []).append(cand)
+        status = _archive_add_status(add_result)
+        if status > 0:
+            state.archive_cells_seen.add(cell)
+            elite = state.qd_elites.get(cell)
+            if elite is None or objective > elite[1]:
+                state.qd_elites[cell] = (cand.prompt, objective)
+            improving.append(cand)
+            improving_by_cell.setdefault(cell, []).append(cand)
 
     denom = float(np.prod(np.array(cfg.bd_dims, dtype=np.int64)))
     coverage = float(len(state.archive_cells_seen) / denom)
     state.archive_coverage_history.append(coverage)
 
-    for cell in by_cell:
-        by_cell[cell].sort(key=lambda c: c.q_total, reverse=True)
+    if not improving:
+        return []
+
+    n_pick = min(n_pick, len(improving))
+    for cell in improving_by_cell:
+        improving_by_cell[cell].sort(key=lambda c: c.q_total, reverse=True)
 
     stratified_quota = int(math.ceil(0.8 * n_pick))
-    one_per_cell = [vals[0] for vals in by_cell.values() if vals]
+    one_per_cell = [vals[0] for vals in improving_by_cell.values() if vals]
     one_per_cell.sort(key=lambda c: c.q_total, reverse=True)
 
     selected: list[Candidate] = one_per_cell[:stratified_quota]
     selected_ids = {c.candidate_id for c in selected}
 
-    all_sorted = sorted(candidates, key=lambda c: c.q_total, reverse=True)
+    all_sorted = sorted(improving, key=lambda c: c.q_total, reverse=True)
     for cand in all_sorted:
         if len(selected) >= n_pick:
             break
@@ -1204,6 +1249,9 @@ def _evaluate_strategy(
     probs = state.probe.predict_proba(heldout_X)
     entropy = _binary_entropy(probs)
     margin = state.probe.margin(heldout_X)
+    logit_var = state.probe.predict_logit_variance(heldout_X)
+    finite_var = logit_var[np.isfinite(logit_var)]
+    mean_logit_variance = float(np.mean(finite_var)) if finite_var.size > 0 else None
 
     if len(np.unique(heldout_y)) >= 2:
         auroc = float(roc_auc_score(heldout_y, probs))
@@ -1214,16 +1262,334 @@ def _evaluate_strategy(
     ece_val = _ece(heldout_y, probs, bins=10)
 
     near = margin < epsilon
-    u_eps = float(np.mean(entropy[near])) if np.any(near) else 0.0
+    near_frac = float(np.mean(near))
+    near_count = int(np.sum(near))
+
+    boundary_auroc: float | None = None
+    boundary_brier: float | None = None
+    boundary_ece: float | None = None
+    if near_count > 0:
+        b_probs = probs[near]
+        b_y = heldout_y[near]
+        boundary_brier = float(brier_score_loss(b_y, b_probs))
+        boundary_ece = float(_ece(b_y, b_probs, bins=10))
+        if len(np.unique(b_y)) >= 2:
+            boundary_auroc = float(roc_auc_score(b_y, b_probs))
 
     return {
         "heldout_auroc": auroc,
         "heldout_brier": brier,
         "heldout_ece": ece_val,
         "global_uncertainty": float(np.mean(entropy)),
-        "uncertainty_mass_near_boundary": u_eps,
-        "near_boundary_fraction": float(np.mean(near)),
+        "mean_logit_variance": mean_logit_variance,
+        "near_boundary_fraction": near_frac,
+        "boundary_heldout_count": near_count,
+        "boundary_heldout_auroc": boundary_auroc,
+        "boundary_heldout_brier": boundary_brier,
+        "boundary_heldout_ece": boundary_ece,
     }
+
+
+def _mean_or_none(values: np.ndarray) -> float | None:
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return None
+    return float(np.mean(finite))
+
+
+def _probe_variance_by_prefix(
+    probe: BayesianLogisticProbe,
+    candidates: list[Candidate],
+    cfg: ExperimentConfig,
+) -> dict[str, list[float | int | None]]:
+    if not candidates:
+        return {
+            "token_index": [],
+            "mean_logit_variance": [],
+            "n_candidates": [],
+        }
+
+    max_p = min(cfg.horizon_tokens, max(c.trajectory.shape[0] for c in candidates))
+    token_index: list[float] = []
+    mean_logit_variance: list[float | None] = []
+    n_candidates: list[int] = []
+
+    for p in range(1, max_p + 1):
+        psi_batch = [
+            _build_psi(cand.trajectory[p - 1])
+            for cand in candidates
+            if cand.trajectory.shape[0] >= p
+        ]
+        if not psi_batch:
+            continue
+        X = np.stack(psi_batch, axis=0)
+        var = probe.predict_logit_variance(X)
+        token_index.append(float(p))
+        mean_logit_variance.append(_mean_or_none(var))
+        n_candidates.append(int(X.shape[0]))
+
+    return {
+        "token_index": token_index,
+        "mean_logit_variance": mean_logit_variance,
+        "n_candidates": n_candidates,
+    }
+
+
+def _variance_curve_delta(curve: dict[str, list[float | int | None]]) -> float | None:
+    means = curve.get("mean_logit_variance", [])
+    finite = [float(v) for v in means if isinstance(v, (float, int)) and np.isfinite(v)]
+    if len(finite) < 2:
+        return None
+    return float(finite[-1] - finite[0])
+
+
+def _to_finite_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(out):
+        return None
+    return out
+
+
+def _labels_to_target(
+    labels_used: list[Any],
+    metric_values: list[Any],
+    target: float,
+    mode: str,
+) -> float | None:
+    if mode not in {"ge", "le"}:
+        raise ValueError(f"Unknown target mode: {mode}")
+
+    for label, value in zip(labels_used, metric_values, strict=False):
+        label_f = _to_finite_float(label)
+        value_f = _to_finite_float(value)
+        if label_f is None or value_f is None:
+            continue
+        if mode == "ge" and value_f >= target:
+            return float(label_f)
+        if mode == "le" and value_f <= target:
+            return float(label_f)
+    return None
+
+
+def _normalized_aulc(labels_used: list[Any], metric_values: list[Any]) -> float | None:
+    x: list[float] = []
+    y: list[float] = []
+    for label, value in zip(labels_used, metric_values, strict=False):
+        label_f = _to_finite_float(label)
+        value_f = _to_finite_float(value)
+        if label_f is None or value_f is None:
+            continue
+        x.append(label_f)
+        y.append(value_f)
+
+    if len(x) < 2:
+        return None
+    span = x[-1] - x[0]
+    if span <= 1e-12:
+        return None
+    area = float(
+        np.trapz(np.asarray(y, dtype=np.float64), np.asarray(x, dtype=np.float64))
+    )
+    return float(area / span)
+
+
+def _compute_label_efficiency_summary(
+    state: StrategyState,
+    cfg: ExperimentConfig,
+) -> dict[str, Any]:
+    labels_used = [m["labels_used"] for m in state.metrics_history]
+    heldout_auroc = [m.get("heldout_auroc") for m in state.metrics_history]
+    heldout_brier = [m.get("heldout_brier") for m in state.metrics_history]
+    heldout_ece = [m.get("heldout_ece") for m in state.metrics_history]
+    boundary_auroc = [m.get("boundary_heldout_auroc") for m in state.metrics_history]
+    boundary_brier = [m.get("boundary_heldout_brier") for m in state.metrics_history]
+    boundary_ece = [m.get("boundary_heldout_ece") for m in state.metrics_history]
+
+    return {
+        "target_auroc": float(cfg.target_auroc),
+        "target_brier": float(cfg.target_brier),
+        "target_ece": float(cfg.target_ece),
+        "labels_to_target_auroc": _labels_to_target(
+            labels_used, heldout_auroc, cfg.target_auroc, mode="ge"
+        ),
+        "labels_to_target_brier": _labels_to_target(
+            labels_used, heldout_brier, cfg.target_brier, mode="le"
+        ),
+        "labels_to_target_ece": _labels_to_target(
+            labels_used, heldout_ece, cfg.target_ece, mode="le"
+        ),
+        "aulc_heldout_auroc": _normalized_aulc(labels_used, heldout_auroc),
+        "aulc_heldout_brier": _normalized_aulc(labels_used, heldout_brier),
+        "aulc_heldout_ece": _normalized_aulc(labels_used, heldout_ece),
+        "aulc_boundary_auroc": _normalized_aulc(labels_used, boundary_auroc),
+        "aulc_boundary_brier": _normalized_aulc(labels_used, boundary_brier),
+        "aulc_boundary_ece": _normalized_aulc(labels_used, boundary_ece),
+    }
+
+
+def _series_mean_ci(
+    series_list: list[list[Any]],
+    z_value: float = 1.96,
+) -> dict[str, list[float | int | None]]:
+    if not series_list:
+        return {
+            "mean": [],
+            "ci95_low": [],
+            "ci95_high": [],
+            "std": [],
+            "n": [],
+        }
+
+    n_steps = min(len(s) for s in series_list)
+    means: list[float | None] = []
+    ci95_low: list[float | None] = []
+    ci95_high: list[float | None] = []
+    stds: list[float | None] = []
+    ns: list[int] = []
+
+    for i in range(n_steps):
+        vals: list[float] = []
+        for series in series_list:
+            fv = _to_finite_float(series[i])
+            if fv is not None:
+                vals.append(fv)
+
+        n = len(vals)
+        ns.append(int(n))
+        if n == 0:
+            means.append(None)
+            ci95_low.append(None)
+            ci95_high.append(None)
+            stds.append(None)
+            continue
+
+        arr = np.asarray(vals, dtype=np.float64)
+        mean = float(np.mean(arr))
+        means.append(mean)
+
+        if n >= 2:
+            std = float(np.std(arr, ddof=1))
+            half = float(z_value * (std / math.sqrt(n)))
+            ci95_low.append(mean - half)
+            ci95_high.append(mean + half)
+            stds.append(std)
+        else:
+            ci95_low.append(None)
+            ci95_high.append(None)
+            stds.append(0.0)
+
+    return {
+        "mean": means,
+        "ci95_low": ci95_low,
+        "ci95_high": ci95_high,
+        "std": stds,
+        "n": ns,
+    }
+
+
+def _scalar_mean_ci(
+    values: list[Any], z_value: float = 1.96
+) -> dict[str, float | int | None]:
+    vals = [v for v in (_to_finite_float(x) for x in values) if v is not None]
+    n = len(vals)
+    if n == 0:
+        return {"mean": None, "ci95_low": None, "ci95_high": None, "std": None, "n": 0}
+
+    arr = np.asarray(vals, dtype=np.float64)
+    mean = float(np.mean(arr))
+    if n >= 2:
+        std = float(np.std(arr, ddof=1))
+        half = float(z_value * (std / math.sqrt(n)))
+        return {
+            "mean": mean,
+            "ci95_low": mean - half,
+            "ci95_high": mean + half,
+            "std": std,
+            "n": int(n),
+        }
+
+    return {
+        "mean": mean,
+        "ci95_low": None,
+        "ci95_high": None,
+        "std": 0.0,
+        "n": 1,
+    }
+
+
+def _aggregate_label_efficiency_curves(
+    reports: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    if not reports:
+        return {}
+
+    first_curves = reports[0]["evaluation"]["label_efficiency_curves"]
+    out: dict[str, dict[str, Any]] = {}
+    for strategy, first_strategy_curves in first_curves.items():
+        strategy_curves = [
+            r["evaluation"]["label_efficiency_curves"][strategy] for r in reports
+        ]
+        labels_series = [curves["labels_used"] for curves in strategy_curves]
+        out_strategy: dict[str, Any] = {
+            "labels_used": _series_mean_ci(labels_series)["mean"]
+        }
+
+        for metric_name in first_strategy_curves:
+            if metric_name == "labels_used":
+                continue
+            metric_series = [curves[metric_name] for curves in strategy_curves]
+            out_strategy[metric_name] = _series_mean_ci(metric_series)
+        out[strategy] = out_strategy
+    return out
+
+
+def _aggregate_final_metrics(
+    reports: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    if not reports:
+        return {}
+
+    first_metrics = reports[0]["evaluation"]["strategies"]
+    out: dict[str, dict[str, Any]] = {}
+    for strategy, first_strategy_metrics in first_metrics.items():
+        strategy_metrics = [r["evaluation"]["strategies"][strategy] for r in reports]
+        out_strategy: dict[str, Any] = {}
+        for key in first_strategy_metrics:
+            values = [m.get(key) for m in strategy_metrics]
+            if all(
+                v is None or isinstance(v, (int, float, np.floating)) for v in values
+            ):
+                out_strategy[key] = _scalar_mean_ci(values)
+        out[strategy] = out_strategy
+    return out
+
+
+def _aggregate_label_efficiency_summary(
+    reports: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    if not reports:
+        return {}
+
+    first_summary = reports[0]["evaluation"]["label_efficiency_summary"]
+    out: dict[str, dict[str, Any]] = {}
+    for strategy, first_strategy_summary in first_summary.items():
+        strategy_summaries = [
+            r["evaluation"]["label_efficiency_summary"][strategy] for r in reports
+        ]
+        out_strategy: dict[str, Any] = {}
+        for key in first_strategy_summary:
+            values = [s.get(key) for s in strategy_summaries]
+            if all(
+                v is None or isinstance(v, (int, float, np.floating)) for v in values
+            ):
+                out_strategy[key] = _scalar_mean_ci(values)
+        out[strategy] = out_strategy
+    return out
 
 
 def _warm_start_candidates(
@@ -1277,9 +1643,21 @@ def _build_candidate_prompts(
     n_random = int(round(cfg.random_seed_fraction * n_total))
     n_mut = max(0, n_total - n_random)
 
-    parent_pool = _dedupe_keep_order(state.prompt_pool + seed_prompts)
-    if not parent_pool:
-        parent_pool = seed_prompts
+    if state.name == "qd_uncertainty":
+        elite_prompts = [prompt for prompt, _score in state.qd_elites.values()]
+        parent_pool = _dedupe_keep_order(elite_prompts)
+        mut_source = "elite_mutation"
+        fallback_source = "elite_fallback"
+        if not parent_pool:
+            parent_pool = seed_prompts
+            mut_source = "seed_bootstrap_mutation"
+            fallback_source = "seed_bootstrap_fallback"
+    else:
+        parent_pool = _dedupe_keep_order(state.prompt_pool + seed_prompts)
+        mut_source = "mutation"
+        fallback_source = "parent_fallback"
+        if not parent_pool:
+            parent_pool = seed_prompts
 
     parents = [
         parent_pool[int(i)]
@@ -1294,7 +1672,7 @@ def _build_candidate_prompts(
         if p in used:
             continue
         used.add(p)
-        prompts.append((p, "mutation", parents[i % len(parents)]))
+        prompts.append((p, mut_source, parents[i % len(parents)]))
         if len(prompts) >= n_mut:
             break
 
@@ -1305,7 +1683,7 @@ def _build_candidate_prompts(
             for i in state.rng.integers(0, len(parent_pool), size=needed)
         ]
         for p in fallback:
-            prompts.append((p, "parent_fallback", None))
+            prompts.append((p, fallback_source, None))
 
     random_prompts = [
         seed_prompts[int(i)]
@@ -1374,13 +1752,17 @@ def _initialize_strategy_state(
             measures = np.asarray(cand.measures, dtype=np.float32)
             objective = float(cand.q_total)
             # ribs>=0.8 expects batched inputs for add().
-            archive.add(
+            add_result = archive.add(
                 solution=solution.reshape(1, -1),
                 objective=np.asarray([objective], dtype=np.float32),
                 measures=measures.reshape(1, -1),
             )
             cell = _cell_index(cand.measures, cfg.bd_dims, ranges)
-            state.archive_cells_seen.add(cell)
+            if _archive_add_status(add_result) > 0:
+                state.archive_cells_seen.add(cell)
+                elite = state.qd_elites.get(cell)
+                if elite is None or objective > elite[1]:
+                    state.qd_elites[cell] = (cand.prompt, objective)
         denom = float(np.prod(np.array(cfg.bd_dims, dtype=np.int64)))
         state.archive_coverage_history.append(
             float(len(state.archive_cells_seen) / denom)
@@ -1416,7 +1798,7 @@ def _prepare_heldout_candidates(
             cand.z_query = zq.astype(np.float32)
             cand.z_prefix_mean = zm.astype(np.float32)
             cand.pca_proj = proj.astype(np.float32)
-            cand.psi = _build_psi(zq, zm, proj, cand.measures)
+            cand.psi = _build_psi(zq)
     return cands
 
 
@@ -1486,9 +1868,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
     for cand in warm_candidates:
         assert cand.z_query is not None and cand.z_prefix_mean is not None
         cand.pca_proj = _project_pca(cand.z_query, pca, cfg.pca_components)
-        cand.psi = _build_psi(
-            cand.z_query, cand.z_prefix_mean, cand.pca_proj, cand.measures
-        )
+        cand.psi = _build_psi(cand.z_query)
 
     warm_judged = _label_candidates(warm_candidates, llm, cache)
     warm_judge_map = {c.candidate_id: jr for c, jr in warm_judged}
@@ -1556,11 +1936,14 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
             heldout_y=heldout_y,
             epsilon=cfg.boundary_margin_epsilon,
         )
+        init_var_curve = _probe_variance_by_prefix(state.probe, heldout_candidates, cfg)
         init_metrics.update(
             {
                 "strategy": name,
                 "iteration": 0,
                 "labels_used": int(len(state.y)),
+                "probe_variance_by_prefix": init_var_curve,
+                "probe_variance_prefix_delta": _variance_curve_delta(init_var_curve),
                 "archive_coverage": (
                     float(state.archive_coverage_history[-1])
                     if state.archive_coverage_history
@@ -1573,6 +1956,8 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
 
     for name, state in strategies.items():
         iter_idx = 1
+        no_progress_iters = 0
+        max_no_progress_iters = 5
         pbar = _make_progress_bar(
             total=cfg.label_budget,
             initial=len(state.y),
@@ -1617,6 +2002,21 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
                 if len(state.y) >= cfg.label_budget:
                     break
 
+            if added_this_iter == 0:
+                no_progress_iters += 1
+                if pbar is not None:
+                    pbar.set_postfix(
+                        iteration=iter_idx,
+                        no_progress=no_progress_iters,
+                        refresh=False,
+                    )
+                cache.save()
+                iter_idx += 1
+                if no_progress_iters >= max_no_progress_iters:
+                    break
+                continue
+
+            no_progress_iters = 0
             state.prompt_pool = _dedupe_keep_order(state.prompt_pool)
             _fit_probe_from_state(state)
 
@@ -1626,11 +2026,14 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
                 heldout_y=heldout_y,
                 epsilon=cfg.boundary_margin_epsilon,
             )
+            var_curve = _probe_variance_by_prefix(state.probe, heldout_candidates, cfg)
             metrics.update(
                 {
                     "strategy": name,
                     "iteration": int(iter_idx),
                     "labels_used": int(len(state.y)),
+                    "probe_variance_by_prefix": var_curve,
+                    "probe_variance_prefix_delta": _variance_curve_delta(var_curve),
                     "archive_coverage": (
                         float(state.archive_coverage_history[-1])
                         if state.archive_coverage_history
@@ -1678,17 +2081,72 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
         if state.metrics_history
     }
 
-    label_efficiency: dict[str, dict[str, list[float]]] = {}
+    label_efficiency: dict[str, dict[str, Any]] = {}
+    label_efficiency_summary: dict[str, dict[str, Any]] = {}
+    probe_variance_curves: dict[str, dict[str, Any]] = {}
     for name, state in strategies.items():
         labels_used = [float(m["labels_used"]) for m in state.metrics_history]
-        ueps = [
-            float(m["uncertainty_mass_near_boundary"]) for m in state.metrics_history
+        near_frac = [
+            _to_finite_float(m.get("near_boundary_fraction"))
+            for m in state.metrics_history
         ]
-        auroc = [float(m["heldout_auroc"]) for m in state.metrics_history]
+        boundary_count = [
+            _to_finite_float(m.get("boundary_heldout_count"))
+            for m in state.metrics_history
+        ]
+        auroc = [
+            _to_finite_float(m.get("heldout_auroc")) for m in state.metrics_history
+        ]
+        brier = [
+            _to_finite_float(m.get("heldout_brier")) for m in state.metrics_history
+        ]
+        ece = [_to_finite_float(m.get("heldout_ece")) for m in state.metrics_history]
+        boundary_auroc = [
+            _to_finite_float(m.get("boundary_heldout_auroc"))
+            for m in state.metrics_history
+        ]
+        boundary_brier = [
+            _to_finite_float(m.get("boundary_heldout_brier"))
+            for m in state.metrics_history
+        ]
+        boundary_ece = [
+            _to_finite_float(m.get("boundary_heldout_ece"))
+            for m in state.metrics_history
+        ]
+        mean_logit_var = [
+            (
+                None
+                if m.get("mean_logit_variance") is None
+                else float(m["mean_logit_variance"])
+            )
+            for m in state.metrics_history
+        ]
+        var_delta = [
+            (
+                None
+                if m.get("probe_variance_prefix_delta") is None
+                else float(m["probe_variance_prefix_delta"])
+            )
+            for m in state.metrics_history
+        ]
+        var_curves = [m["probe_variance_by_prefix"] for m in state.metrics_history]
         label_efficiency[name] = {
             "labels_used": labels_used,
-            "uncertainty_mass_near_boundary": ueps,
+            "near_boundary_fraction": near_frac,
             "heldout_auroc": auroc,
+            "heldout_brier": brier,
+            "heldout_ece": ece,
+            "boundary_heldout_count": boundary_count,
+            "boundary_heldout_auroc": boundary_auroc,
+            "boundary_heldout_brier": boundary_brier,
+            "boundary_heldout_ece": boundary_ece,
+            "mean_logit_variance": mean_logit_var,
+            "probe_variance_prefix_delta": var_delta,
+        }
+        label_efficiency_summary[name] = _compute_label_efficiency_summary(state, cfg)
+        probe_variance_curves[name] = {
+            "labels_used": labels_used,
+            "per_iteration": var_curves,
         }
 
     report = {
@@ -1704,6 +2162,8 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
         "evaluation": {
             "strategies": final_metrics,
             "label_efficiency_curves": label_efficiency,
+            "label_efficiency_summary": label_efficiency_summary,
+            "probe_variance_curves": probe_variance_curves,
         },
         "artifacts": {
             "config_json": str(run_dir / "config.json"),
@@ -1724,9 +2184,79 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
     return report
 
 
+def run_seeded_experiments(cfg: ExperimentConfig) -> dict[str, Any]:
+    if cfg.num_seeds < 1:
+        raise ValueError("num_seeds must be >= 1.")
+    if cfg.seed_stride < 1:
+        raise ValueError("seed_stride must be >= 1.")
+
+    if cfg.num_seeds == 1:
+        return run_experiment(replace(cfg, num_seeds=1))
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    run_dir = cfg.output_root / f"seeded_{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    seeds = [cfg.random_state + (i * cfg.seed_stride) for i in range(cfg.num_seeds)]
+    per_seed_reports: list[dict[str, Any]] = []
+    seed_runs: list[dict[str, Any]] = []
+
+    for i, seed in enumerate(seeds):
+        seed_root = run_dir / f"seed_{i:02d}_{seed}"
+        seed_cfg = replace(
+            cfg,
+            random_state=seed,
+            num_seeds=1,
+            output_root=seed_root,
+            output_json=None,
+        )
+        seed_report = run_experiment(seed_cfg)
+        per_seed_reports.append(seed_report)
+        seed_report_path = Path(seed_report["run_dir"]) / "final_report.json"
+        seed_runs.append(
+            {
+                "seed": int(seed),
+                "run_dir": str(seed_report["run_dir"]),
+                "final_report_json": str(seed_report_path),
+            }
+        )
+
+    aggregate_label_efficiency = _aggregate_label_efficiency_curves(per_seed_reports)
+    aggregate_final_metrics = _aggregate_final_metrics(per_seed_reports)
+    aggregate_label_efficiency_summary = _aggregate_label_efficiency_summary(
+        per_seed_reports
+    )
+
+    report = {
+        "experiment": asdict(cfg),
+        "run_dir": str(run_dir),
+        "multi_seed": {
+            "n_seeds": int(cfg.num_seeds),
+            "seed_stride": int(cfg.seed_stride),
+            "seeds": [int(s) for s in seeds],
+            "ci_method": "normal_approx_95",
+            "seed_runs": seed_runs,
+        },
+        "evaluation": {
+            "strategies_mean_ci": aggregate_final_metrics,
+            "label_efficiency_curves_mean_ci": aggregate_label_efficiency,
+            "label_efficiency_summary_mean_ci": aggregate_label_efficiency_summary,
+        },
+    }
+
+    final_report_path = run_dir / "final_report.json"
+    final_report_path.write_text(json.dumps(report, indent=2, default=str))
+
+    if cfg.output_json is not None:
+        cfg.output_json.parent.mkdir(parents=True, exist_ok=True)
+        cfg.output_json.write_text(json.dumps(report, indent=2, default=str))
+
+    return report
+
+
 def main() -> None:
     cfg = _parse_args()
-    report = run_experiment(cfg)
+    report = run_seeded_experiments(cfg)
     text = json.dumps(report, indent=2, default=str)
     print(text)
     if cfg.output_json is not None:
