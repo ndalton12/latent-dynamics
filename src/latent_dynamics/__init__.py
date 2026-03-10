@@ -19,6 +19,21 @@ from latent_dynamics.config import (
     RunConfig,
 )
 from latent_dynamics.data import load_examples, prepare_text_and_labels
+from latent_dynamics.drift import (
+    compute_drift_metrics,
+    evaluate_generator_shift,
+    first_exit_time,
+)
+from latent_dynamics.dynamics import (
+    TrustRegionModel,
+    baseline_brt_align_scores,
+    baseline_nglare_scores,
+    baseline_sap_proxy_scores,
+    fit_trust_region_model,
+    save_trust_region_model,
+    split_indices_70_15_15,
+    trust_region_scores,
+)
 from latent_dynamics.hub import (
     activation_subpath,
     load_activations,
@@ -36,10 +51,18 @@ __all__ = [
     "activation_subpath",
     "build_feature_matrix",
     "drift_curve",
+    "first_exit_time",
+    "compute_drift_metrics",
+    "evaluate_generator_shift",
     "extract_hidden_trajectories",
     "extract_multi_layer_trajectories",
     "fit_trust_region",
+    "fit_trust_region_model",
     "lat_scan",
+    "TrustRegionModel",
+    "baseline_brt_align_scores",
+    "baseline_nglare_scores",
+    "baseline_sap_proxy_scores",
     "load_activations",
     "load_examples",
     "load_model_and_tokenizer",
@@ -52,5 +75,8 @@ __all__ = [
     "push_to_hub",
     "resolve_device",
     "save_activations",
+    "save_trust_region_model",
+    "split_indices_70_15_15",
+    "trust_region_scores",
     "train_linear_probe",
 ]

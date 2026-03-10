@@ -13,6 +13,7 @@ dependencies = [
     "datasets>=4.6.0",
     "flashlite>=0.1.0",
     "jupyter>=1.1.1",
+    "mapie>=0.9.2",
     "plotly>=6.5.2",
     "ribs>=0.8.3",
     "safetensors>=0.5.0",

@@ -392,6 +392,41 @@ def qd_active(
         typer.echo(f"Wrote report to {output_json}")
 
 
+@app.command("milestone23")
+def milestone23(
+    activations: Annotated[
+        Path,
+        typer.Option(help="Local activations leaf directory for train/calib/test split."),
+    ],
+    shifted_activations: Annotated[
+        Optional[Path],
+        typer.Option(help="Optional shifted-domain activations for generator-shift AUROC."),
+    ] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option(help="Output directory for markdown/latex tables and report."),
+    ] = Path("experiments/outputs"),
+    model_output: Annotated[
+        Optional[Path],
+        typer.Option(help="Optional trust-region model path (.pkl)."),
+    ] = None,
+    seed: Annotated[int, typer.Option(help="Random seed for split (70/15/15).")] = 42,
+) -> None:
+    """Run Milestones 2+3 pipeline: trust region, baselines, drift, and table exports."""
+    from latent_dynamics.experiments.m2_m3_pipeline import PipelineConfig, run_pipeline
+
+    cfg = PipelineConfig(
+        activations=activations,
+        shifted_activations=shifted_activations,
+        output_dir=output_dir,
+        model_output=model_output,
+        seed=seed,
+    )
+    report = run_pipeline(cfg)
+    typer.echo(json.dumps(report, indent=2, default=str))
+    typer.echo(f"Wrote report: {output_dir / 'milestone23_report.json'}")
+
+
 @app.command()
 def list_models() -> None:
     """List available model keys."""
