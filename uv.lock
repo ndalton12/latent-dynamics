@@ -1044,6 +1044,16 @@ wheels = [
 ]
 
 [[package]]
+name = "iisignature"
+version = "0.24"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
+    { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/ee/f94dd13bfec5c6f2871f40a0eda9102a3e03fe914140e0ce204ad2d75c38/iisignature-0.24.tar.gz", hash = "sha256:0b9314c6e8b80487faf323191fb35986ad4226e86b0c67cf0a3b2939b695b9c6", size = 1253992 }
+
+[[package]]
 name = "importlib-metadata"
 version = "8.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1537,6 +1547,7 @@ dependencies = [
     { name = "datasets" },
     { name = "flashlite", version = "0.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "flashlite", version = "0.2.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
+    { name = "iisignature" },
     { name = "jupyter" },
     { name = "mapie" },
     { name = "plotly" },
@@ -1557,6 +1568,7 @@ requires-dist = [
     { name = "bitsandbytes", specifier = ">=0.49.2" },
     { name = "datasets", specifier = ">=4.6.0" },
     { name = "flashlite", specifier = ">=0.1.0" },
+    { name = "iisignature", specifier = ">=0.24" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "mapie", specifier = ">=0.9.2" },
     { name = "plotly", specifier = ">=6.5.2" },

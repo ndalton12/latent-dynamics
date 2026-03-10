@@ -4,7 +4,12 @@ from dataclasses import replace
 from typing import Any, Callable
 
 import numpy as np
-from datasets import Dataset, get_dataset_config_names, get_dataset_split_names, load_dataset
+from datasets import (
+    Dataset,
+    get_dataset_config_names,
+    get_dataset_split_names,
+    load_dataset,
+)
 from datasets.exceptions import DatasetGenerationError
 
 from latent_dynamics.config import DATASET_REGISTRY, TOY_CONTRASTIVE, DatasetSpec
@@ -36,7 +41,9 @@ def _resolve_config_and_split(path: str, requested_split: str) -> tuple[str, str
     if not config_names:
         raise ValueError(f"No dataset configs found for '{path}'.")
 
-    config_name = requested_split if requested_split in config_names else config_names[0]
+    config_name = (
+        requested_split if requested_split in config_names else config_names[0]
+    )
     split_names = get_dataset_split_names(path, config_name)
     if requested_split in split_names:
         split_name = requested_split
@@ -93,10 +100,73 @@ def _resolve_text_field(spec: DatasetSpec, ds: Dataset) -> str:
     return best_field
 
 
+def _label_from_row(row: dict[str, Any], spec: DatasetSpec) -> int | None:
+    if spec.label_field is not None:
+        return int(row[spec.label_field])
+    if spec.label_fn is not None:
+        return int(spec.label_fn(row))
+    return None
+
+
+def _balanced_sample_by_label(
+    ds: Dataset,
+    spec: DatasetSpec,
+    max_samples: int,
+    seed: int,
+) -> Dataset:
+    if max_samples <= 0 or len(ds) <= max_samples:
+        return ds
+
+    buckets: dict[int, list[int]] = {}
+    for idx, row in enumerate(ds):
+        label = _label_from_row(row, spec)
+        if label is None:
+            continue
+        buckets.setdefault(label, []).append(idx)
+
+    if len(buckets) < 2:
+        print(
+            "Stratified sampling requested but this split has <2 labels; "
+            "falling back to first max_samples rows."
+        )
+        return ds.select(range(max_samples))
+
+    rng = np.random.default_rng(seed)
+    labels = sorted(buckets.keys())
+    for lab in labels:
+        rng.shuffle(buckets[lab])
+
+    per_label = max_samples // len(labels)
+    remainder = max_samples % len(labels)
+    selected: list[int] = []
+    leftovers: list[int] = []
+    for i, lab in enumerate(labels):
+        target = per_label + (1 if i < remainder else 0)
+        take = min(target, len(buckets[lab]))
+        selected.extend(buckets[lab][:take])
+        leftovers.extend(buckets[lab][take:])
+
+    needed = max_samples - len(selected)
+    if needed > 0 and leftovers:
+        rng.shuffle(leftovers)
+        selected.extend(leftovers[:needed])
+
+    if len(selected) < max_samples:
+        print(
+            f"Only {len(selected)} labelled rows available for stratified sampling; "
+            f"requested {max_samples}."
+        )
+
+    rng.shuffle(selected)
+    return ds.select(selected)
+
+
 def load_examples(
     dataset_key: str,
     split: str = "train",
     max_samples: int | None = None,
+    stratify_labels: bool = False,
+    stratify_seed: int = 42,
 ) -> tuple[Dataset, DatasetSpec]:
     spec = DATASET_REGISTRY[dataset_key]
 
@@ -120,8 +190,14 @@ def load_examples(
                         "Falling back to streaming load due dataset generation error "
                         f"(config='{config_name}', split='{split_name}')."
                     )
+                    stream_cap = max_samples
+                    if stratify_labels and max_samples is not None:
+                        stream_cap = max(max_samples * 20, max_samples + 100)
                     ds = _streaming_to_dataset(
-                        spec.path, config_name, split_name, max_samples,
+                        spec.path,
+                        config_name,
+                        split_name,
+                        stream_cap,
                     )
             else:
                 raise
@@ -130,10 +206,10 @@ def load_examples(
                 "Falling back to streaming load due dataset generation error "
                 f"(split='{split}')."
             )
-            ds = _streaming_to_dataset(spec.path, spec.name, split, max_samples)
-
-    if max_samples and len(ds) > max_samples:
-        ds = ds.select(range(max_samples))
+            stream_cap = max_samples
+            if stratify_labels and max_samples is not None:
+                stream_cap = max(max_samples * 20, max_samples + 100)
+            ds = _streaming_to_dataset(spec.path, spec.name, split, stream_cap)
 
     effective_text_field = _resolve_text_field(spec, ds)
     if effective_text_field != spec.text_field:
@@ -141,6 +217,18 @@ def load_examples(
             f"Text field '{spec.text_field}' not found; using '{effective_text_field}'."
         )
     effective_spec = replace(spec, text_field=effective_text_field)
+
+    if max_samples and len(ds) > max_samples:
+        if stratify_labels:
+            ds = _balanced_sample_by_label(
+                ds,
+                effective_spec,
+                max_samples=max_samples,
+                seed=stratify_seed,
+            )
+        else:
+            ds = ds.select(range(max_samples))
+
     return ds, effective_spec
 
 

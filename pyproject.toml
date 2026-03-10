@@ -18,6 +18,7 @@ dependencies = [
     "ribs>=0.8.3",
     "safetensors>=0.5.0",
     "sae-lens>=6.37.5",
+    "iisignature>=0.24",  # install with: uv pip install iisignature --no-build-isolation
     "scikit-learn>=1.8.0",
     "statsmodels>=0.14.4",
     "tqdm>=4.67.1",

@@ -30,7 +30,12 @@ from latent_dynamics.experiments.kalman_conformal_experiment import (
     run_experiment as run_kalman,
 )
 from latent_dynamics.hub import activation_subpath, load_activations, save_activations
+from latent_dynamics.judge import JudgeCache, SafetyJudge, judge_texts
 from latent_dynamics.models import load_model_and_tokenizer, resolve_device
+from latent_dynamics.trajectory_features import (
+    signature_prefix_score_map,
+    turning_angle_score_map,
+)
 
 
 @dataclass
@@ -56,6 +61,18 @@ class BenchmarkConfig:
     churn_dictionary_dim: int = 1024
     churn_top_k: int = 32
     linear_koopman_dim: int = 64
+    signature_pca_dim: int = 16
+    signature_depth: int = 2
+    benign_manifold_rank: int = 8
+    # LLM-as-judge options. When judge_model is set, completions are generated
+    # for every prompt and labeled by the judge. These judge labels replace
+    # dataset labels and become the ground truth for all classifiers.
+    judge_model: str | None = None
+    judge_max_new_tokens: int = 128
+    judge_requests_per_minute: int = 120
+    judge_max_concurrency: int = 12
+    judge_batch_size: int = 32
+    judge_cache_path: Path | None = None
     qd_report_json: Path | None = None
     output_json: Path | None = None
 
@@ -90,6 +107,23 @@ def _parse_args() -> BenchmarkConfig:
     parser.add_argument("--churn-dictionary-dim", type=int, default=1024)
     parser.add_argument("--churn-top-k", type=int, default=32)
     parser.add_argument("--linear-koopman-dim", type=int, default=64)
+    parser.add_argument("--signature-pca-dim", type=int, default=16)
+    parser.add_argument("--signature-depth", type=int, default=2)
+    parser.add_argument("--benign-manifold-rank", type=int, default=8)
+    parser.add_argument(
+        "--judge-model",
+        default=None,
+        help=(
+            "OpenAI-compatible model for LLM-as-judge labeling (e.g. gpt-4o-mini). "
+            "When set, completions are generated for every prompt and judged; "
+            "judge labels replace dataset labels as ground truth."
+        ),
+    )
+    parser.add_argument("--judge-max-new-tokens", type=int, default=128)
+    parser.add_argument("--judge-rpm", type=int, default=120)
+    parser.add_argument("--judge-max-concurrency", type=int, default=12)
+    parser.add_argument("--judge-batch-size", type=int, default=32)
+    parser.add_argument("--judge-cache-path", type=Path, default=None)
     parser.add_argument("--qd-report-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     args = parser.parse_args()
@@ -116,6 +150,15 @@ def _parse_args() -> BenchmarkConfig:
         churn_dictionary_dim=args.churn_dictionary_dim,
         churn_top_k=args.churn_top_k,
         linear_koopman_dim=args.linear_koopman_dim,
+        signature_pca_dim=args.signature_pca_dim,
+        signature_depth=args.signature_depth,
+        benign_manifold_rank=args.benign_manifold_rank,
+        judge_model=args.judge_model,
+        judge_max_new_tokens=args.judge_max_new_tokens,
+        judge_requests_per_minute=args.judge_rpm,
+        judge_max_concurrency=args.judge_max_concurrency,
+        judge_batch_size=args.judge_batch_size,
+        judge_cache_path=args.judge_cache_path,
         qd_report_json=args.qd_report_json,
         output_json=args.output_json,
     )
@@ -353,7 +396,9 @@ def _summary_from_prefix_stats(
     }
 
 
-def _load_external_qd_summary(path: Path | None, fpr_target: float) -> dict[str, Any] | None:
+def _load_external_qd_summary(
+    path: Path | None, fpr_target: float
+) -> dict[str, Any] | None:
     if path is None:
         return None
     if not path.exists():
@@ -509,6 +554,34 @@ def _linear_koopman_score_map(
     return score_map
 
 
+def _judge_completions(
+    prompts: list[str],
+    completions: list[str],
+    cfg: BenchmarkConfig,
+) -> np.ndarray:
+    """Judge already-generated (prompt, completion) pairs and return int64 labels.
+
+    Separated from generation so the caller can reuse completions that were
+    already produced during trajectory extraction.
+    """
+    cache: JudgeCache | None = None
+    if cfg.judge_cache_path is not None:
+        cache = JudgeCache(cfg.judge_cache_path)
+
+    assert cfg.judge_model is not None
+    judge = SafetyJudge(
+        model=cfg.judge_model,
+        requests_per_minute=cfg.judge_requests_per_minute,
+        max_concurrency=cfg.judge_max_concurrency,
+        batch_size=cfg.judge_batch_size,
+        show_progress=True,
+    )
+
+    pairs = list(zip(prompts, completions, strict=False))
+    results = judge_texts(pairs, judge, cache)
+    return np.array([1 if r.unsafe else 0 for r in results], dtype=np.int64)
+
+
 def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
     layers = cfg.layers if cfg.layers is not None else [5]
     if cfg.activations_root is not None:
@@ -538,7 +611,12 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
         max_new_tokens=cfg.max_new_tokens,
         include_prompt_in_trajectory=cfg.include_prompt_in_trajectory,
     )
-    ds, spec = load_examples(run_cfg.dataset_key, run_cfg.split, run_cfg.max_samples)
+    ds, spec = load_examples(
+        run_cfg.dataset_key,
+        run_cfg.split,
+        run_cfg.max_samples,
+        stratify_labels=True,
+    )
     texts, labels = prepare_text_and_labels(
         ds,
         text_field=spec.text_field,
@@ -548,9 +626,31 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
     if labels is None:
         raise ValueError("Dataset must provide labels for this benchmark.")
 
+    # Generation-trajectory mode (--no-include-prompt): judge labeling is
+    # required, and use_generate must be True so trajectories come from the
+    # generated tokens. We force it here so the user doesn't need both flags.
+    use_judge = not cfg.include_prompt_in_trajectory
+    if use_judge:
+        if cfg.judge_model is None:
+            raise ValueError(
+                "--no-include-prompt (generation-trajectory mode) requires "
+                "--judge-model to be set so completions can be labeled. "
+                "Example: --judge-model gpt-4o-mini"
+            )
+        run_cfg = RunConfig(
+            **{**run_cfg.__dict__, "use_generate": True, "max_new_tokens": cfg.judge_max_new_tokens}
+        )
+    elif cfg.judge_model is not None:
+        print(
+            "Warning: --judge-model is set but --no-include-prompt is not. "
+            "Judge labeling is only used in generation-trajectory mode; "
+            "dataset labels will be used instead."
+        )
+
     model, tokenizer = load_model_and_tokenizer(
         run_cfg.model_key, run_cfg.device or "cpu"
     )
+
     per_layer, token_texts = extract_multi_layer_trajectories(
         model=model,
         tokenizer=tokenizer,
@@ -560,6 +660,20 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
         device=run_cfg.device or "cpu",
         cfg=run_cfg,
     )
+
+    if use_judge:
+        # token_texts[i] holds the generated tokens (prompt excluded because
+        # include_prompt_in_trajectory=False). Decode them as the completion and
+        # judge against the original prompt — no second generation needed.
+        completions = [
+            tokenizer.convert_tokens_to_string(toks) for toks in token_texts
+        ]
+        labels = _judge_completions(texts, completions, cfg)
+        print(
+            f"Judge labels: {int(labels.sum())} unsafe / "
+            f"{int((labels == 0).sum())} safe"
+        )
+
     paths: dict[int, Path] = {}
     for li in layers:
         p = out_root / activation_subpath(cfg.dataset_key, cfg.split, cfg.model_key, li)
@@ -579,6 +693,9 @@ def _run_baseline_family(
     max_prefix: int,
     seed: int,
     linear_koopman_dim: int,
+    signature_pca_dim: int = 16,
+    signature_depth: int = 2,
+    benign_manifold_rank: int = 8,
 ) -> dict[str, dict[str, Any]]:
     train_states = np.concatenate(
         [trajectories[int(i)] for i in train_idx], axis=0
@@ -611,6 +728,25 @@ def _run_baseline_family(
             dim=linear_koopman_dim,
             ridge=1e-4,
             safe_only=True,
+            seed=seed,
+        ),
+        "turning_angle_conformal": turning_angle_score_map(
+            trajectories=trajectories,
+            labels=labels,
+            train_idx=train_idx,
+            pca_n_components=signature_pca_dim,
+            manifold_rank=benign_manifold_rank,
+            max_prefix=max_prefix,
+            seed=seed,
+        ),
+        "signature_prefix_lr": signature_prefix_score_map(
+            trajectories=trajectories,
+            labels=labels,
+            train_idx=train_idx,
+            pca_n_components=signature_pca_dim,
+            depth=signature_depth,
+            add_time=True,
+            max_prefix=max_prefix,
             seed=seed,
         ),
     }
@@ -658,8 +794,25 @@ def run_benchmark(cfg: BenchmarkConfig) -> dict[str, Any]:
             layer_paths[li]
         )
         if labels is None or len(np.unique(labels)) < 2:
+            if labels is None:
+                raise ValueError(
+                    f"Layer {li} has missing labels; cannot benchmark prefix detectors."
+                )
+            uniq, cnt = np.unique(labels, return_counts=True)
+            counts_str = ", ".join(
+                f"{int(u)}:{int(c)}" for u, c in zip(uniq.tolist(), cnt.tolist())
+            )
+            hint = ""
+            if (
+                source_cfg.dataset_key == "wildjailbreak"
+                and source_cfg.split == "train"
+            ):
+                hint = (
+                    " wildjailbreak/train is typically one-class; try `--split eval`."
+                )
             raise ValueError(
-                f"Layer {li} has missing/single-class labels; cannot benchmark prefix detectors."
+                f"Layer {li} has single-class labels ({counts_str}); cannot benchmark "
+                f"prefix detectors.{hint}"
             )
 
         for seed in seeds:
@@ -680,6 +833,9 @@ def run_benchmark(cfg: BenchmarkConfig) -> dict[str, Any]:
                 max_prefix=cfg.max_prefix,
                 seed=seed,
                 linear_koopman_dim=cfg.linear_koopman_dim,
+                signature_pca_dim=cfg.signature_pca_dim,
+                signature_depth=cfg.signature_depth,
+                benign_manifold_rank=cfg.benign_manifold_rank,
             )
 
             k_res = run_kalman(

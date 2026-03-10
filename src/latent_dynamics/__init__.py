@@ -42,6 +42,24 @@ from latent_dynamics.hub import (
     save_activations,
 )
 from latent_dynamics.models import load_model_and_tokenizer, resolve_device
+from latent_dynamics.trajectory_features import (
+    BenignManifold,
+    compute_prefix_signatures,
+    compute_turning_angles,
+    fit_benign_manifold,
+    fit_trajectory_pca,
+    reduce_trajectories,
+    signature_prefix_score_map,
+    turning_angle_score_map,
+)
+from latent_dynamics.judge import (
+    JudgeCache,
+    JudgeResult,
+    SafetyJudge,
+    judge_cache_key,
+    judge_texts,
+    stable_text_hash,
+)
 from latent_dynamics.viz import plot_drift_curves, plot_lat_scans
 
 __all__ = [
@@ -79,4 +97,18 @@ __all__ = [
     "split_indices_70_15_15",
     "trust_region_scores",
     "train_linear_probe",
+    "BenignManifold",
+    "compute_prefix_signatures",
+    "compute_turning_angles",
+    "fit_benign_manifold",
+    "fit_trajectory_pca",
+    "reduce_trajectories",
+    "signature_prefix_score_map",
+    "turning_angle_score_map",
+    "JudgeCache",
+    "JudgeResult",
+    "SafetyJudge",
+    "judge_cache_key",
+    "judge_texts",
+    "stable_text_hash",
 ]

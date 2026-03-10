@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
-import hashlib
 import json
+import logging
 import math
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -17,16 +16,27 @@ from sklearn.metrics import brier_score_loss, roc_auc_score
 from latent_dynamics.activations import extract_multi_layer_trajectories
 from latent_dynamics.config import MODEL_REGISTRY, RunConfig
 from latent_dynamics.data import load_examples, prepare_text_and_labels
+from latent_dynamics.judge import (
+    JudgeCache,
+    JudgeResult,
+    SafetyJudge,
+    _chunk_starts,
+    _iter_with_progress,
+    _run_async,
+    _extract_response_text,
+    judge_cache_key,
+    judge_texts,
+    stable_text_hash as _stable_text_hash,
+)
 from latent_dynamics.models import load_model_and_tokenizer, resolve_device
 
 # Runtime assumptions:
 # - OPENAI_API_KEY is set
-# - FLASHLITE_DEFAULT_MODEL is set (defaults to gpt-5-mini in this script)
 # - flashlite + ribs are installed via pyproject dependencies.
 
 DEFAULT_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "prompts" / "qd_active"
 MUTATION_TEMPLATE_NAME = "mutate_prompt"
-SAFETY_JUDGE_TEMPLATE_NAME = "safety_judge"
+LOGGER = logging.getLogger(__name__)
 
 
 MUTATION_STYLES = [
@@ -71,6 +81,7 @@ class ExperimentConfig:
     template_dir: Path | None = None
     rollout_batch_size: int = 16
     show_progress: bool = True
+    debug: bool = False
 
     alpha_uncertainty: float = 0.7
     alpha_novelty: float = 0.3
@@ -133,13 +144,6 @@ class StrategyState:
     qd_elites: dict[tuple[int, int, int], tuple[str, float]] = field(
         default_factory=dict
     )
-
-
-@dataclass
-class JudgeResult:
-    unsafe: bool
-    confidence: float
-    rationale: str
 
 
 class BayesianLogisticProbe:
@@ -246,10 +250,12 @@ class BayesianLogisticProbe:
 
 
 class ProxyLLM:
+    """Handles prompt mutation via flashlite. Judging is delegated to SafetyJudge."""
+
     def __init__(self, cfg: ExperimentConfig) -> None:
         try:
             from flashlite import Flashlite, RateLimitConfig, RetryConfig
-        except Exception as e:  # pragma: no cover - import path check
+        except Exception as e:
             raise ImportError(
                 "flashlite is required. Install dependencies and set OPENAI_API_KEY."
             ) from e
@@ -320,55 +326,6 @@ class ProxyLLM:
                     out.append(cleaned)
         return out
 
-    def judge_batch(self, samples: list[tuple[str, str]]) -> list[JudgeResult]:
-        reqs = [
-            {
-                "template": SAFETY_JUDGE_TEMPLATE_NAME,
-                "variables": {"prompt": p, "rollout": r},
-            }
-            for p, r in samples
-        ]
-
-        parsed: list[JudgeResult] = []
-        starts = _chunk_starts(len(reqs), self.batch_size)
-        iterator = _iter_with_progress(
-            starts=starts,
-            desc=f"judge rollouts ({len(samples)})",
-            enabled=self.show_progress and len(starts) > 1,
-        )
-        for start in iterator:
-            req_batch = reqs[start : start + self.batch_size]
-            resps = _run_async(
-                self.client.complete_many(
-                    req_batch, max_concurrency=self.max_concurrency
-                )
-            )
-            for resp in resps:
-                txt = _extract_response_text(resp)
-                parsed.append(_parse_judge_output(txt))
-        return parsed
-
-
-class JudgeCache:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.data: dict[str, dict[str, Any]] = {}
-        if path.exists():
-            try:
-                self.data = json.loads(path.read_text())
-            except json.JSONDecodeError:
-                self.data = {}
-
-    def get(self, key: str) -> dict[str, Any] | None:
-        return self.data.get(key)
-
-    def set(self, key: str, value: dict[str, Any]) -> None:
-        self.data[key] = value
-
-    def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2))
-
 
 def _parse_args() -> ExperimentConfig:
     parser = argparse.ArgumentParser(
@@ -409,6 +366,7 @@ def _parse_args() -> ExperimentConfig:
     parser.add_argument("--template-dir", type=Path, default=None)
     parser.add_argument("--rollout-batch-size", type=int, default=16)
     parser.add_argument("--no-progress", action="store_true")
+    parser.add_argument("--debug", action="store_true")
 
     parser.add_argument("--alpha-uncertainty", type=float, default=0.7)
     parser.add_argument("--alpha-novelty", type=float, default=0.3)
@@ -462,6 +420,7 @@ def _parse_args() -> ExperimentConfig:
         template_dir=args.template_dir,
         rollout_batch_size=args.rollout_batch_size,
         show_progress=(not args.no_progress),
+        debug=args.debug,
         alpha_uncertainty=args.alpha_uncertainty,
         alpha_novelty=args.alpha_novelty,
         bd_dims=tuple(args.bd_dims),
@@ -499,26 +458,6 @@ def _normalize(values: np.ndarray) -> np.ndarray:
     return (values - vmin) / (vmax - vmin)
 
 
-def _chunk_starts(n_items: int, chunk_size: int) -> list[int]:
-    if chunk_size < 1:
-        raise ValueError("chunk_size must be >= 1.")
-    return list(range(0, n_items, chunk_size))
-
-
-def _iter_with_progress(
-    starts: list[int],
-    desc: str,
-    enabled: bool,
-):
-    if not enabled:
-        return starts
-    try:
-        from tqdm.auto import tqdm
-    except Exception:
-        return starts
-    return tqdm(starts, desc=desc, leave=False, dynamic_ncols=True)
-
-
 def _make_progress_bar(
     total: int,
     initial: int,
@@ -538,70 +477,6 @@ def _make_progress_bar(
         leave=False,
         dynamic_ncols=True,
     )
-
-
-def _run_async(coro: Any) -> Any:
-    try:
-        _ = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
-def _extract_response_text(resp: Any) -> str:
-    if hasattr(resp, "content"):
-        content = getattr(resp, "content")
-        if isinstance(content, str):
-            return content
-    if isinstance(resp, str):
-        return resp
-    if isinstance(resp, dict):
-        if "content" in resp and isinstance(resp["content"], str):
-            return resp["content"]
-        if "text" in resp and isinstance(resp["text"], str):
-            return resp["text"]
-    return str(resp)
-
-
-def _parse_judge_output(text: str) -> JudgeResult:
-    parsed: dict[str, Any] | None = None
-    cleaned = text.strip()
-
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        cleaned = cleaned.removeprefix("json").strip()
-
-    try:
-        obj = json.loads(cleaned)
-        if isinstance(obj, dict):
-            parsed = obj
-    except json.JSONDecodeError:
-        parsed = None
-
-    if parsed is None:
-        low = cleaned.lower()
-        unsafe = ("unsafe" in low and "true" in low) or (
-            "harmful" in low and "yes" in low
-        )
-        confidence = 0.5
-        return JudgeResult(
-            unsafe=unsafe, confidence=confidence, rationale="heuristic_parse"
-        )
-
-    unsafe = bool(parsed.get("unsafe", False))
-    confidence_val = parsed.get("confidence", 0.5)
-    try:
-        confidence = float(confidence_val)
-    except (TypeError, ValueError):
-        confidence = 0.5
-    confidence = float(np.clip(confidence, 0.0, 1.0))
-    rationale = str(parsed.get("rationale", ""))
-    return JudgeResult(unsafe=unsafe, confidence=confidence, rationale=rationale)
 
 
 def _dedupe_keep_order(values: Iterable[str]) -> list[str]:
@@ -824,6 +699,13 @@ def _rollout_candidates(
 ) -> list[Candidate]:
     if not prompts:
         return []
+    if cfg.debug:
+        LOGGER.debug(
+            "Rollout start uid=%s prompts=%d batch_size=%d",
+            uid_prefix,
+            len(prompts),
+            cfg.rollout_batch_size,
+        )
 
     out: list[Candidate] = []
     starts = _chunk_starts(len(prompts), max(1, cfg.rollout_batch_size))
@@ -865,6 +747,8 @@ def _rollout_candidates(
                     measures=measures,
                 )
             )
+    if cfg.debug:
+        LOGGER.debug("Rollout complete uid=%s candidates=%d", uid_prefix, len(out))
     return out
 
 
@@ -1065,6 +949,13 @@ def _select_candidates(
     state.archive_coverage_history.append(coverage)
 
     if not improving:
+        if cfg.debug:
+            LOGGER.debug(
+                "QD iter=%d no archive improvements: pool=%d coverage=%.4f",
+                iteration_idx,
+                len(candidates),
+                coverage,
+            )
         return []
 
     n_pick = min(n_pick, len(improving))
@@ -1087,58 +978,49 @@ def _select_candidates(
         selected.append(cand)
         selected_ids.add(cand.candidate_id)
 
+    if cfg.debug:
+        preview = ", ".join(
+            (
+                f"{cand.candidate_id}:{cand.q_total:.3f}"
+                f"@{_cell_index(cand.measures, cfg.bd_dims, state.archive_ranges)}"
+            )
+            for cand in selected[: min(5, len(selected))]
+        )
+        LOGGER.debug(
+            "QD iter=%d pool=%d improving=%d cells_touched=%d selected=%d coverage=%.4f top=%s",
+            iteration_idx,
+            len(candidates),
+            len(improving),
+            len(improving_by_cell),
+            len(selected),
+            coverage,
+            preview if preview else "none",
+        )
+
     return selected
-
-
-def _stable_text_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _judge_key(prompt: str, snippet: str) -> str:
-    return _stable_text_hash(f"{prompt}\n<ROLL>\n{snippet}")
 
 
 def _label_candidates(
     candidates: list[Candidate],
-    llm: ProxyLLM,
+    judge: SafetyJudge,
     cache: JudgeCache,
+    debug: bool = False,
 ) -> list[tuple[Candidate, JudgeResult]]:
-    out: list[tuple[Candidate, JudgeResult]] = []
-    to_query: list[Candidate] = []
+    pairs = [(c.prompt, c.rollout_snippet) for c in candidates]
+    results = judge_texts(pairs, judge, cache)
 
-    for cand in candidates:
-        key = _judge_key(cand.prompt, cand.rollout_snippet)
-        cached = cache.get(key)
-        if cached is None:
-            to_query.append(cand)
-        else:
-            out.append(
-                (
-                    cand,
-                    JudgeResult(
-                        unsafe=bool(cached.get("unsafe", False)),
-                        confidence=float(cached.get("confidence", 0.5)),
-                        rationale=str(cached.get("rationale", "cache")),
-                    ),
-                )
-            )
+    if debug:
+        n_cached = sum(
+            1 for c in candidates if cache.get(judge_cache_key(c.prompt, c.rollout_snippet)) is not None
+        )
+        LOGGER.debug(
+            "Judge cache lookup: total=%d hits=%d misses=%d",
+            len(candidates),
+            n_cached,
+            len(candidates) - n_cached,
+        )
 
-    if to_query:
-        pairs = [(c.prompt, c.rollout_snippet) for c in to_query]
-        judged = llm.judge_batch(pairs)
-        for cand, result in zip(to_query, judged, strict=False):
-            key = _judge_key(cand.prompt, cand.rollout_snippet)
-            cache.set(
-                key,
-                {
-                    "unsafe": bool(result.unsafe),
-                    "confidence": float(result.confidence),
-                    "rationale": result.rationale,
-                },
-            )
-            out.append((cand, result))
-
-    return out
+    return list(zip(candidates, results, strict=False))
 
 
 def _candidate_record(
@@ -1169,7 +1051,7 @@ def _candidate_record(
             "novelty": float(cand.q_nov),
             "total": float(cand.q_total),
         },
-        "cache_key": _judge_key(cand.prompt, cand.rollout_snippet),
+        "cache_key": judge_cache_key(cand.prompt, cand.rollout_snippet),
     }
 
 
@@ -1215,10 +1097,19 @@ def _evaluate_strategy(
     heldout_y: np.ndarray,
     epsilon: float,
 ) -> dict[str, Any]:
-    probs = state.probe.predict_proba(heldout_X)
+    return _evaluate_probe(state.probe, heldout_X, heldout_y, epsilon)
+
+
+def _evaluate_probe(
+    probe: BayesianLogisticProbe,
+    heldout_X: np.ndarray,
+    heldout_y: np.ndarray,
+    epsilon: float,
+) -> dict[str, Any]:
+    probs = probe.predict_proba(heldout_X)
     entropy = _binary_entropy(probs)
-    margin = state.probe.margin(heldout_X)
-    logit_var = state.probe.predict_logit_variance(heldout_X)
+    margin = probe.margin(heldout_X)
+    logit_var = probe.predict_logit_variance(heldout_X)
     finite_var = logit_var[np.isfinite(logit_var)]
     mean_logit_variance = float(np.mean(finite_var)) if finite_var.size > 0 else None
 
@@ -1561,6 +1452,29 @@ def _aggregate_label_efficiency_summary(
     return out
 
 
+def _aggregate_pre_active_baseline(
+    reports: list[dict[str, Any]],
+) -> dict[str, dict[str, float | int | None]]:
+    if not reports:
+        return {}
+
+    baselines = [
+        r.get("evaluation", {}).get("pre_active_baseline")
+        for r in reports
+        if isinstance(r.get("evaluation", {}).get("pre_active_baseline"), dict)
+    ]
+    if not baselines:
+        return {}
+
+    first = baselines[0]
+    out: dict[str, dict[str, float | int | None]] = {}
+    for key in first:
+        values = [b.get(key) for b in baselines]
+        if all(v is None or isinstance(v, (int, float, np.floating)) for v in values):
+            out[key] = _scalar_mean_ci(values)
+    return out
+
+
 def _warm_start_candidates(
     harmful_seed_prompts: list[str],
     benign_seed_prompts: list[str],
@@ -1677,6 +1591,16 @@ def _build_candidate_prompts(
         ]
         dedup_out.extend((p, "seed_topup", None) for p in extra)
 
+    if cfg.debug and state.name == "qd_uncertainty":
+        LOGGER.debug(
+            "QD prompt build: parent_pool=%d elites=%d mutate_target=%d random_target=%d final=%d",
+            len(parent_pool),
+            len(state.qd_elites),
+            n_mut,
+            n_random,
+            min(len(dedup_out), n_total),
+        )
+
     return dedup_out[:n_total]
 
 
@@ -1735,6 +1659,14 @@ def _initialize_strategy_state(
         state.archive_coverage_history.append(
             float(len(state.archive_cells_seen) / denom)
         )
+        if cfg.debug:
+            LOGGER.debug(
+                "QD init: warm=%d labels=%d unique_cells=%d coverage=%.4f",
+                len(warm_candidates),
+                len(state.y),
+                len(state.archive_cells_seen),
+                state.archive_coverage_history[-1],
+            )
 
     return state
 
@@ -1780,6 +1712,15 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     run_dir = cfg.output_root / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
+    if cfg.debug:
+        LOGGER.debug(
+            "Run start: run_dir=%s strategy=%s warm_start=%d budget=%d candidate_pool=%d",
+            run_dir,
+            ",".join(cfg.strategies),
+            cfg.warm_start_labels,
+            cfg.label_budget,
+            cfg.candidate_pool_size,
+        )
 
     labeled_jsonl = run_dir / "labeled_pool.jsonl"
     metrics_jsonl = run_dir / "iteration_metrics.jsonl"
@@ -1790,6 +1731,14 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
 
     rng = np.random.default_rng(cfg.random_state)
     llm = ProxyLLM(cfg)
+    judge = SafetyJudge(
+        model=cfg.proxy_model,
+        max_concurrency=cfg.proxy_max_concurrency,
+        batch_size=cfg.proxy_batch_size,
+        requests_per_minute=cfg.proxy_requests_per_minute,
+        tokens_per_minute=cfg.proxy_tokens_per_minute,
+        show_progress=cfg.show_progress,
+    )
 
     harmful_seed, benign_seed = _load_seed_prompts(cfg)
     seed_harmful, seed_benign, heldout_prompts, split_info = _split_seed_and_heldout(
@@ -1799,6 +1748,13 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
         rng=rng,
     )
     seed_prompts = _interleave_balanced(seed_harmful, seed_benign, rng)
+    if cfg.debug:
+        LOGGER.debug(
+            "Seed split: harmful_seed=%d benign_seed=%d heldout=%d",
+            len(seed_harmful),
+            len(seed_benign),
+            len(heldout_prompts),
+        )
 
     run_cfg = _make_run_cfg(cfg)
     model, tokenizer = load_model_and_tokenizer(
@@ -1829,12 +1785,20 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
         assert cand.z_query is not None and cand.z_prefix_mean is not None
         cand.psi = _build_psi(cand.z_query)
 
-    warm_judged = _label_candidates(warm_candidates, llm, cache)
+    warm_judged = _label_candidates(warm_candidates, judge, cache, debug=cfg.debug)
     warm_judge_map = {c.candidate_id: jr for c, jr in warm_judged}
     warm_labels = [
         1 if warm_judge_map[c.candidate_id].unsafe else 0 for c in warm_candidates
     ]
     warm_judge = [warm_judge_map[c.candidate_id] for c in warm_candidates]
+    if cfg.debug:
+        n_unsafe = int(np.sum(np.asarray(warm_labels, dtype=np.int64)))
+        LOGGER.debug(
+            "Warm labels: total=%d unsafe=%d safe=%d",
+            len(warm_labels),
+            n_unsafe,
+            len(warm_labels) - n_unsafe,
+        )
 
     probe_boot = BayesianLogisticProbe(c=cfg.logistic_c, max_iter=cfg.logistic_max_iter)
     X_boot = np.stack([c.psi for c in warm_candidates if c.psi is not None], axis=0)
@@ -1853,7 +1817,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
         run_cfg,
         cfg,
     )
-    heldout_judged = _label_candidates(heldout_candidates, llm, cache)
+    heldout_judged = _label_candidates(heldout_candidates, judge, cache, debug=cfg.debug)
     heldout_label_map = {c.candidate_id: jr for c, jr in heldout_judged}
     heldout_y = np.array(
         [
@@ -1863,6 +1827,43 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
         dtype=np.int64,
     )
     heldout_X = _build_eval_matrix(heldout_candidates)
+    if cfg.debug:
+        n_heldout_unsafe = int(np.sum(heldout_y))
+        LOGGER.debug(
+            "Heldout labels: total=%d unsafe=%d safe=%d",
+            len(heldout_y),
+            n_heldout_unsafe,
+            len(heldout_y) - n_heldout_unsafe,
+        )
+
+    warm_unsafe_count = int(np.sum(np.asarray(warm_labels, dtype=np.int64)))
+    baseline_var_curve = _probe_variance_by_prefix(probe_boot, heldout_candidates, cfg)
+    pre_active_baseline = _evaluate_probe(
+        probe_boot,
+        heldout_X=heldout_X,
+        heldout_y=heldout_y,
+        epsilon=cfg.boundary_margin_epsilon,
+    )
+    pre_active_baseline.update(
+        {
+            "strategy": "pre_active_baseline",
+            "iteration": 0,
+            "labels_used": int(len(warm_labels)),
+            "probe_variance_by_prefix": baseline_var_curve,
+            "probe_variance_prefix_delta": _variance_curve_delta(baseline_var_curve),
+            "train_set_size": int(len(warm_labels)),
+            "train_unsafe_count": int(warm_unsafe_count),
+            "train_safe_count": int(len(warm_labels) - warm_unsafe_count),
+        }
+    )
+    if cfg.debug:
+        LOGGER.debug(
+            "Baseline: labels=%d heldout_auroc=%s heldout_brier=%s heldout_ece=%s",
+            pre_active_baseline["labels_used"],
+            pre_active_baseline.get("heldout_auroc"),
+            pre_active_baseline.get("heldout_brier"),
+            pre_active_baseline.get("heldout_ece"),
+        )
 
     strategies: dict[str, StrategyState] = {}
     for i, name in enumerate(cfg.strategies):
@@ -1933,9 +1934,26 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
             )
             _select_query_states(cand_pool, state.probe, cfg)
             _score_candidates(cand_pool, state, cfg)
+            if cfg.debug and name == "qd_uncertainty" and cand_pool:
+                q_scores = np.asarray([c.q_total for c in cand_pool], dtype=np.float64)
+                LOGGER.debug(
+                    "QD iter=%d pool stats: n=%d q_total[min=%.3f mean=%.3f max=%.3f]",
+                    iter_idx,
+                    len(cand_pool),
+                    float(np.min(q_scores)),
+                    float(np.mean(q_scores)),
+                    float(np.max(q_scores)),
+                )
 
             selected = _select_candidates(cand_pool, state, cfg, iteration_idx=iter_idx)
-            judged = _label_candidates(selected, llm, cache)
+            judged = _label_candidates(selected, judge, cache, debug=cfg.debug)
+            if cfg.debug and name == "qd_uncertainty":
+                LOGGER.debug(
+                    "QD iter=%d selected=%d judged=%d",
+                    iter_idx,
+                    len(selected),
+                    len(judged),
+                )
 
             added_this_iter = 0
             for cand, jr in judged:
@@ -1961,6 +1979,13 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
 
             if added_this_iter == 0:
                 no_progress_iters += 1
+                if cfg.debug and name == "qd_uncertainty":
+                    LOGGER.debug(
+                        "QD iter=%d no labels added (streak=%d/%d)",
+                        iter_idx,
+                        no_progress_iters,
+                        max_no_progress_iters,
+                    )
                 if pbar is not None:
                     pbar.set_postfix(
                         iteration=iter_idx,
@@ -2000,6 +2025,16 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
             )
             state.metrics_history.append(metrics)
             _append_jsonl(metrics_jsonl, metrics)
+            if cfg.debug and name == "qd_uncertainty":
+                LOGGER.debug(
+                    "QD iter=%d labels=%d coverage=%s heldout_auroc=%s heldout_brier=%s heldout_ece=%s",
+                    iter_idx,
+                    len(state.y),
+                    metrics.get("archive_coverage"),
+                    metrics.get("heldout_auroc"),
+                    metrics.get("heldout_brier"),
+                    metrics.get("heldout_ece"),
+                )
 
             if pbar is not None:
                 pbar.update(added_this_iter)
@@ -2013,6 +2048,17 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
 
     qd_state = strategies.get("qd_uncertainty")
     if qd_state is not None:
+        if cfg.debug:
+            final_cov = (
+                qd_state.archive_coverage_history[-1]
+                if qd_state.archive_coverage_history
+                else 0.0
+            )
+            LOGGER.debug(
+                "QD final: cells_seen=%d coverage=%.4f",
+                len(qd_state.archive_cells_seen),
+                float(final_cov),
+            )
         cells = sorted(list(qd_state.archive_cells_seen))
         arr_cells = (
             np.array(cells, dtype=np.int32)
@@ -2117,6 +2163,7 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
             "split_balance": split_info,
         },
         "evaluation": {
+            "pre_active_baseline": pre_active_baseline,
             "strategies": final_metrics,
             "label_efficiency_curves": label_efficiency,
             "label_efficiency_summary": label_efficiency_summary,
@@ -2183,6 +2230,7 @@ def run_seeded_experiments(cfg: ExperimentConfig) -> dict[str, Any]:
     aggregate_label_efficiency_summary = _aggregate_label_efficiency_summary(
         per_seed_reports
     )
+    aggregate_pre_active_baseline = _aggregate_pre_active_baseline(per_seed_reports)
 
     report = {
         "experiment": asdict(cfg),
@@ -2195,6 +2243,7 @@ def run_seeded_experiments(cfg: ExperimentConfig) -> dict[str, Any]:
             "seed_runs": seed_runs,
         },
         "evaluation": {
+            "pre_active_baseline_mean_ci": aggregate_pre_active_baseline,
             "strategies_mean_ci": aggregate_final_metrics,
             "label_efficiency_curves_mean_ci": aggregate_label_efficiency,
             "label_efficiency_summary_mean_ci": aggregate_label_efficiency_summary,
@@ -2213,6 +2262,17 @@ def run_seeded_experiments(cfg: ExperimentConfig) -> dict[str, Any]:
 
 def main() -> None:
     cfg = _parse_args()
+    if cfg.debug:
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        handler.addFilter(lambda record: record.name == LOGGER.name)
+        LOGGER.handlers.clear()
+        LOGGER.addHandler(handler)
+        LOGGER.setLevel(logging.DEBUG)
+        LOGGER.propagate = False
     report = run_seeded_experiments(cfg)
     text = json.dumps(report, indent=2, default=str)
     print(text)
