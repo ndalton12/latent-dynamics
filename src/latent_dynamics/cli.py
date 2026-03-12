@@ -26,7 +26,6 @@ class DatasetKey(str, Enum):
     toy_contrastive = "toy_contrastive"
     wildjailbreak = "wildjailbreak"
     xstest = "xstest"
-    harmbench = "harmbench"
 
 
 class DirectionMethod(str, Enum):
@@ -49,11 +48,14 @@ def extract(
     dataset: Annotated[
         DatasetKey, typer.Option(help="Dataset key from registry.")
     ] = DatasetKey.toy_contrastive,
-    split: Annotated[str, typer.Option(help="Dataset split.")] = "train",
     layer: Annotated[
         Optional[list[int]],
         typer.Option(help="Layer index (repeat for multiple: --layer 5 --layer 10)."),
     ] = None,
+    all_layers: Annotated[
+        bool,
+        typer.Option("--all-layers/--no-all-layers", help="Extract all layers."),
+    ] = False,
     max_samples: Annotated[int, typer.Option(help="Maximum number of examples.")] = 120,
     max_input_tokens: Annotated[
         int, typer.Option(help="Maximum token sequence length.")
@@ -61,7 +63,7 @@ def extract(
     output: Annotated[
         Path,
         typer.Option(
-            help="Root output directory. Activations are saved under {dataset}/{split}/{model}/layer_{N}/."
+            help="Root output directory. Activations are saved under {dataset}/{model}/layer_{N}/."
         ),
     ] = Path("./activations"),
     push_to_hub: Annotated[
@@ -93,8 +95,10 @@ def extract(
     """Extract hidden-state trajectories from a model and dataset, save to disk.
 
     Activations are stored under a structured path:
-      {output}/{dataset}/{split}/{model}/layer_{N}/
-    This layout is mirrored when pushing to HuggingFace Hub.
+      {output}/{dataset}/{model}/layer_{N}/
+    Each layer directory contains a metadata.json that records the layer index,
+    input prompts, and generated text (when using --use-generate) so that
+    activations can be matched back to their source data.
     """
     from latent_dynamics.activations import extract_multi_layer_trajectories
     from latent_dynamics.config import RunConfig
@@ -108,15 +112,20 @@ def extract(
     )
     from latent_dynamics.models import load_model_and_tokenizer, resolve_device
 
-    layer_indices = layer if layer else [5]
+    layer_indices: list[int] | None = None
+    if all_layers:
+        layer_indices = None
+    elif layer:
+        layer_indices = layer
+    else:
+        layer_indices = [5]
 
     cfg = RunConfig(
         model_key=model.value,
         dataset_key=dataset.value,
-        split=split,
         max_samples=max_samples,
         max_input_tokens=max_input_tokens,
-        layer_idx=layer_indices[0],
+        layer_idx=layer_indices[0] if layer_indices else 0,
         device=resolve_device(device),
         use_generate=use_generate,
         max_new_tokens=max_new_tokens,
@@ -125,12 +134,10 @@ def extract(
 
     typer.echo(f"Device: {cfg.device}")
     typer.echo(f"Model:  {cfg.model_key}")
-    typer.echo(
-        f"Dataset: {cfg.dataset_key} (split={cfg.split}, max_samples={cfg.max_samples})"
-    )
-    typer.echo(f"Layers:  {layer_indices}")
+    typer.echo(f"Dataset: {cfg.dataset_key} (max_samples={cfg.max_samples})")
+    typer.echo(f"Layers:  {'all' if layer_indices is None else layer_indices}")
 
-    ds, spec = load_examples(cfg.dataset_key, cfg.split, cfg.max_samples)
+    ds, spec = load_examples(cfg.dataset_key, cfg.max_samples)
     texts, labels = prepare_text_and_labels(
         ds,
         text_field=spec.text_field,
@@ -150,25 +157,31 @@ def extract(
     )
 
     typer.echo(
-        f"Extracting trajectories for layers {layer_indices} (single forward pass)..."
+        f"Extracting trajectories for layers "
+        f"{'all' if layer_indices is None else layer_indices} ..."
     )
-    per_layer, token_texts = extract_multi_layer_trajectories(
+    result = extract_multi_layer_trajectories(
         mdl,
         tokenizer,
         texts,
         layer_indices=layer_indices,
-        max_input_tokens=cfg.max_input_tokens,
-        device=cfg.device,
         cfg=cfg,
     )
-    typer.echo(f"Extracted {len(texts)} trajectories x {len(layer_indices)} layers.")
+    extracted_layers = sorted(result.per_layer.keys())
+    typer.echo(f"Extracted {len(texts)} trajectories x {len(extracted_layers)} layers.")
 
-    for li in layer_indices:
-        sub = activation_subpath(cfg.dataset_key, cfg.split, cfg.model_key, li)
+    for li in extracted_layers:
+        sub = activation_subpath(cfg.dataset_key, cfg.model_key, li)
         layer_dir = output / sub
         layer_cfg = RunConfig(**{**cfg.__dict__, "layer_idx": li})
         save_activations(
-            layer_dir, per_layer[li], texts, labels, token_texts, layer_cfg
+            layer_dir,
+            result.per_layer[li],
+            texts,
+            labels,
+            result.token_texts,
+            layer_cfg,
+            generated_texts=result.generated_texts,
         )
         typer.echo(f"  Saved layer {li} -> {layer_dir}")
 
@@ -196,10 +209,6 @@ def analyze(
     hub_model: Annotated[
         Optional[str],
         typer.Option(help="Model key for Hub path resolution (with --from-hub)."),
-    ] = None,
-    hub_split: Annotated[
-        Optional[str],
-        typer.Option(help="Split for Hub path resolution (with --from-hub)."),
     ] = None,
     hub_layer: Annotated[
         Optional[int],
@@ -257,21 +266,22 @@ def analyze(
         for name, val in [
             ("--hub-dataset", hub_dataset),
             ("--hub-model", hub_model),
-            ("--hub-split", hub_split),
             ("--hub-layer", hub_layer),
         ]:
             if val is None:
                 typer.echo(f"{name} is required when using --from-hub.", err=True)
                 raise typer.Exit(code=1)
 
-        assert hub_dataset and hub_model and hub_split and hub_layer is not None
-        sub = activation_subpath(hub_dataset, hub_split, hub_model, hub_layer)
+        assert hub_dataset and hub_model and hub_layer is not None
+        sub = activation_subpath(hub_dataset, hub_model, hub_layer)
         activations = Path(f".cache/hub/{from_hub.replace('/', '__')}") / sub
         typer.echo(f"Pulling from Hub: {from_hub} / {sub}")
         pull_from_hub(from_hub, activations, path_in_repo=str(sub))
 
     assert activations is not None
-    trajectories, texts, labels, token_texts, cfg = load_activations(activations)
+    trajectories, texts, labels, token_texts, _generated, cfg = load_activations(
+        activations
+    )
     typer.echo(f"Loaded {len(trajectories)} trajectories from {activations}")
     typer.echo(
         f"  model={cfg.model_key}  dataset={cfg.dataset_key}  layer={cfg.layer_idx}"

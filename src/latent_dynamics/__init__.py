@@ -1,6 +1,7 @@
 """Latent trajectory analysis for language models."""
 
 from latent_dynamics.activations import (
+    ExtractionResult,
     build_feature_matrix,
     extract_hidden_trajectories,
     extract_multi_layer_trajectories,
@@ -72,6 +73,7 @@ __all__ = [
     "first_exit_time",
     "compute_drift_metrics",
     "evaluate_generator_shift",
+    "ExtractionResult",
     "extract_hidden_trajectories",
     "extract_multi_layer_trajectories",
     "fit_trust_region",

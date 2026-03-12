@@ -148,7 +148,6 @@ def main() -> None:
     cfg = RunConfig(
         model_key=model_key,
         dataset_key=dataset_key,
-        split="train",
         max_samples=num_samples,
         max_input_tokens=args.max_input_tokens,
         layer_idx=layer_list[0],
@@ -156,7 +155,7 @@ def main() -> None:
     )
 
     # Load data: single split or 70/15/15
-    ds_full, spec = load_examples(dataset_key, split="train", max_samples=None)
+    ds_full, spec = load_examples(dataset_key, max_samples=None)
     if args.use_70_15_15 and len(ds_full) >= 3:
         from datasets import concatenate_datasets
 
@@ -198,18 +197,20 @@ def main() -> None:
         model_key, device, load_in_4bit=args.load_4bit
     )
     print(f"Extracting trajectories for {n} examples, layers {layer_list}...")
-    per_layer, token_texts = extract_multi_layer_trajectories(
-        model, tokenizer, texts, layer_list, cfg.max_input_tokens, device, cfg
+    result = extract_multi_layer_trajectories(
+        model, tokenizer, texts, layer_list, cfg,
     )
 
     # Success message with trajectory shape (first example, first layer)
+    per_layer = result.per_layer
+    token_texts = result.token_texts
     first_traj = per_layer[layer_list[0]][0]
     T, hidden_dim = first_traj.shape
     print(f"SUCCESS: trajectory shape ({T}, {hidden_dim})")
 
     # Save safetensors + metadata per layer
     for li in layer_list:
-        sub = activation_subpath(dataset_key, cfg.split, model_key, li)
+        sub = activation_subpath(dataset_key, model_key, li)
         out_dir = args.output / sub
         layer_cfg = RunConfig(**{**cfg.__dict__, "layer_idx": li})
         save_activations(
@@ -219,6 +220,7 @@ def main() -> None:
             labels,
             token_texts,
             layer_cfg,
+            generated_texts=result.generated_texts,
         )
         print(f"  Saved layer {li} -> {out_dir}")
 

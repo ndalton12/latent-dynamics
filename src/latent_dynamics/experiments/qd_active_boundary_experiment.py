@@ -495,7 +495,6 @@ def _dedupe_keep_order(values: Iterable[str]) -> list[str]:
 def _load_seed_prompts(cfg: ExperimentConfig) -> tuple[list[str], list[str]]:
     harmful_ds, harmful_spec = load_examples(
         cfg.harmful_dataset_key,
-        split=cfg.harmful_split,
         max_samples=cfg.max_harmful_prompts,
     )
     harmful_texts, harmful_labels = prepare_text_and_labels(
@@ -509,7 +508,6 @@ def _load_seed_prompts(cfg: ExperimentConfig) -> tuple[list[str], list[str]]:
 
     benign_ds, benign_spec = load_examples(
         cfg.benign_dataset_key,
-        split=cfg.benign_split,
         max_samples=cfg.max_benign_prompts,
     )
     benign_texts, benign_labels = prepare_text_and_labels(
@@ -719,19 +717,17 @@ def _rollout_candidates(
     for start in iterator:
         prompt_batch = prompts[start : start + cfg.rollout_batch_size]
         texts = [p[0] for p in prompt_batch]
-        per_layer, token_texts = extract_multi_layer_trajectories(
+        result = extract_multi_layer_trajectories(
             model=model,
             tokenizer=tokenizer,
             texts=texts,
             layer_indices=[cfg.layer_idx],
-            max_input_tokens=cfg.max_input_tokens,
-            device=run_cfg.device or "cpu",
             cfg=run_cfg,
         )
-        trajs = per_layer[cfg.layer_idx]
+        trajs = result.per_layer[cfg.layer_idx]
 
         for i, (prompt, source, parent_prompt) in enumerate(prompt_batch):
-            toks = token_texts[i]
+            toks = result.token_texts[i]
             snippet_tokens = toks[-cfg.horizon_tokens :]
             snippet = tokenizer.convert_tokens_to_string(snippet_tokens)
             global_i = start + i

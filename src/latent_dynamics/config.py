@@ -8,7 +8,6 @@ from typing import Any, Callable
 class RunConfig:
     model_key: str = "gemma3_4b"
     dataset_key: str = "toy_contrastive"
-    split: str = "train"
     max_samples: int = 120
     max_input_tokens: int = 256
     layer_idx: int = 5

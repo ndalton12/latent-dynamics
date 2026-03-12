@@ -117,7 +117,7 @@ def _prepare_trajectories(
     cfg: ExperimentConfig,
 ) -> tuple[list[np.ndarray], np.ndarray, RunConfig]:
     if cfg.activations is not None:
-        trajectories, _texts, labels, _tokens, run_cfg = load_activations(
+        trajectories, _texts, labels, _tokens, _gen, run_cfg = load_activations(
             cfg.activations
         )
         if labels is None:
@@ -127,7 +127,6 @@ def _prepare_trajectories(
     run_cfg = RunConfig(
         model_key=cfg.model_key,
         dataset_key=cfg.dataset_key,
-        split=cfg.split,
         max_samples=cfg.max_samples,
         max_input_tokens=cfg.max_input_tokens,
         layer_idx=cfg.layer_idx,
@@ -137,7 +136,7 @@ def _prepare_trajectories(
         include_prompt_in_trajectory=cfg.include_prompt_in_trajectory,
     )
 
-    ds, spec = load_examples(run_cfg.dataset_key, run_cfg.split, run_cfg.max_samples)
+    ds, spec = load_examples(run_cfg.dataset_key, run_cfg.max_samples)
     texts, labels = prepare_text_and_labels(
         ds,
         text_field=spec.text_field,
@@ -150,15 +149,14 @@ def _prepare_trajectories(
     model, tokenizer = load_model_and_tokenizer(
         run_cfg.model_key, run_cfg.device or "cpu"
     )
-    trajectories, _tokens = extract_hidden_trajectories(
+    result = extract_hidden_trajectories(
         model=model,
         tokenizer=tokenizer,
         texts=texts,
         layer_idx=run_cfg.layer_idx,
-        max_input_tokens=run_cfg.max_input_tokens,
-        device=run_cfg.device or "cpu",
         cfg=run_cfg,
     )
+    trajectories = result.per_layer[run_cfg.layer_idx]
     return trajectories, labels, run_cfg
 
 

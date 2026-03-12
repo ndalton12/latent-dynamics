@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -8,11 +9,22 @@ from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from latent_dynamics.config import RunConfig
+from latent_dynamics.models import resolve_device
 
 # Global seeding for reproducible trajectory extraction.
 torch.manual_seed(42)
 np.random.seed(42)
 random.seed(42)
+
+
+@dataclass
+class ExtractionResult:
+    """Result of multi-layer trajectory extraction."""
+
+    per_layer: dict[int, list[np.ndarray]]
+    token_texts: list[list[str]]
+    input_prompts: list[str]
+    generated_texts: list[str | None]
 
 
 def _trim_trailing_pad(ids: torch.Tensor, pad_token_id: int | None) -> torch.Tensor:
@@ -95,25 +107,57 @@ def generate_full_sequence(
     return only_new
 
 
+def _decode_generated(
+    seq_ids: torch.Tensor,
+    prompt_len: int,
+    include_prompt: bool,
+    tokenizer: AutoTokenizer,
+    pad_token_id: int | None,
+) -> str:
+    """Decode only the generated (non-prompt) portion of a sequence."""
+    if include_prompt:
+        gen_ids = seq_ids[prompt_len:]
+    else:
+        gen_ids = seq_ids
+    gen_ids = _trim_trailing_pad(gen_ids, pad_token_id)
+    return tokenizer.decode(gen_ids.cpu(), skip_special_tokens=True)
+
+
 def extract_multi_layer_trajectories(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     texts: list[str],
-    layer_indices: list[int],
-    max_input_tokens: int,
-    device: str,
+    layer_indices: list[int] | None,
     cfg: RunConfig,
-) -> tuple[dict[int, list[np.ndarray]], list[list[str]]]:
-    """Collect trajectories for all requested layers, with optional true batched inference."""
+) -> ExtractionResult:
+    """Collect trajectories for requested layers, with optional true batched inference.
+
+    Args:
+        layer_indices: Specific layer indices to extract. Pass ``None`` to
+            extract all layers (embedding + every transformer layer).
+    """
+    device = resolve_device(cfg.device)
+    max_length = cfg.max_input_tokens
+
+    if layer_indices is None:
+        text_cfg = (
+            model.config.get_text_config()
+            if hasattr(model.config, "get_text_config")
+            else model.config
+        )
+        n_layers = text_cfg.num_hidden_layers
+        layer_indices = list(range(n_layers + 1))
+
     per_layer: dict[int, list[np.ndarray]] = {li: [] for li in layer_indices}
     token_texts: list[list[str]] = []
+    generated_texts: list[str | None] = []
 
     if cfg.use_true_batch_inference and texts:
         inputs = tokenizer(
             texts,
             return_tensors="pt",
             truncation=True,
-            max_input_tokens=max_input_tokens,
+            max_length=max_length,
             padding=True,
         )
         input_ids = inputs["input_ids"].to(device)
@@ -146,6 +190,13 @@ def extract_multi_layer_trajectories(
                     token_texts.append(
                         tokenizer.convert_ids_to_tokens(ids.cpu().tolist())
                     )
+                    generated_texts.append(
+                        _decode_generated(
+                            seq_ids[i], prompt_len,
+                            cfg.include_prompt_in_trajectory,
+                            tokenizer, tokenizer.pad_token_id,
+                        )
+                    )
                     for li in layer_indices:
                         hs_row = out.hidden_states[li][i]
                         hs = hs_row.index_select(0, positions).float().cpu().numpy()
@@ -164,18 +215,24 @@ def extract_multi_layer_trajectories(
                     token_texts.append(
                         tokenizer.convert_ids_to_tokens(ids.cpu().tolist())
                     )
+                    generated_texts.append(None)
                     for li in layer_indices:
                         hs_row = out.hidden_states[li][i]
                         hs = hs_row.index_select(0, positions).float().cpu().numpy()
                         per_layer[li].append(hs)
-        return per_layer, token_texts
+        return ExtractionResult(
+            per_layer=per_layer,
+            token_texts=token_texts,
+            input_prompts=list(texts),
+            generated_texts=generated_texts,
+        )
 
     for text in tqdm(texts):
         inputs = tokenizer(
             text,
             return_tensors="pt",
             truncation=True,
-            max_input_tokens=max_input_tokens,
+            max_length=max_length,
         )
         input_ids = inputs["input_ids"].to(device)
         attention_mask = inputs["attention_mask"].to(device)
@@ -195,6 +252,14 @@ def extract_multi_layer_trajectories(
                     attention_mask=seq_attn,
                     output_hidden_states=True,
                 )
+                prompt_len = int(input_ids.shape[1])
+                generated_texts.append(
+                    _decode_generated(
+                        seq_ids[0], prompt_len,
+                        cfg.include_prompt_in_trajectory,
+                        tokenizer, tokenizer.pad_token_id,
+                    )
+                )
                 ids = seq_ids[0].cpu().tolist()
                 for li in layer_indices:
                     hs = out.hidden_states[li][0].float().cpu().numpy()
@@ -207,13 +272,19 @@ def extract_multi_layer_trajectories(
                 )
                 attn = attention_mask[0].bool()
                 ids = input_ids[0][attn].cpu().tolist()
+                generated_texts.append(None)
                 for li in layer_indices:
                     hs = out.hidden_states[li][0][attn].float().cpu().numpy()
                     per_layer[li].append(hs)
 
         token_texts.append(tokenizer.convert_ids_to_tokens(ids))
 
-    return per_layer, token_texts
+    return ExtractionResult(
+        per_layer=per_layer,
+        token_texts=token_texts,
+        input_prompts=list(texts),
+        generated_texts=generated_texts,
+    )
 
 
 def extract_hidden_trajectories(
@@ -221,21 +292,12 @@ def extract_hidden_trajectories(
     tokenizer: AutoTokenizer,
     texts: list[str],
     layer_idx: int,
-    max_input_tokens: int,
-    device: str,
     cfg: RunConfig,
-) -> tuple[list[np.ndarray], list[list[str]]]:
+) -> ExtractionResult:
     """Convenience wrapper for a single layer."""
-    per_layer, token_texts = extract_multi_layer_trajectories(
-        model,
-        tokenizer,
-        texts,
-        [layer_idx],
-        max_input_tokens,
-        device,
-        cfg,
+    return extract_multi_layer_trajectories(
+        model, tokenizer, texts, [layer_idx], cfg,
     )
-    return per_layer[layer_idx], token_texts
 
 
 def pool_trajectory(traj: np.ndarray, mode: str = "last") -> np.ndarray:
