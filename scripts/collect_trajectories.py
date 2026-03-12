@@ -23,16 +23,43 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import numpy as np
+from datasets import Dataset
 
 from latent_dynamics.activations import extract_multi_layer_trajectories
-from latent_dynamics.config import DATASET_REGISTRY, DEFAULT_LAYERS, MODEL_REGISTRY, RunConfig
-from latent_dynamics.data import load_examples, make_70_15_15_split, prepare_text_and_labels
+from latent_dynamics.config import (
+    DATASET_REGISTRY,
+    DEFAULT_LAYERS,
+    MODEL_REGISTRY,
+    RunConfig,
+)
+from latent_dynamics.data import load_examples, prepare_text_and_labels
 from latent_dynamics.hub import (
     activation_subpath,
     push_trajectory_dataset_to_hub,
     save_activations,
 )
 from latent_dynamics.models import load_model_and_tokenizer, resolve_device
+
+
+def make_70_15_15_split(
+    ds: Dataset,
+    seed: int = 42,
+) -> tuple[Dataset, Dataset, Dataset]:
+    """Return train, calib, test splits with 70/15/15 proportion."""
+    if len(ds) < 3:
+        raise ValueError("Dataset too small for 70/15/15 split.")
+
+    # First: 70% train, 30% temp.
+    train_test = ds.train_test_split(test_size=0.30, seed=seed)
+    train_ds = train_test["train"]
+    temp_ds = train_test["test"]
+
+    # Second: split temp into 15% calib, 15% test (equal halves of remaining 30%).
+    calib_test = temp_ds.train_test_split(test_size=0.5, seed=seed)
+    calib_ds = calib_test["train"]
+    test_ds = calib_test["test"]
+
+    return train_ds, calib_ds, test_ds
 
 
 def _parse_args() -> argparse.Namespace:
@@ -142,7 +169,9 @@ def main() -> None:
             n_train = min(1, len(train_ds))
             n_total = n_train
         train_ds = train_ds.select(range(n_train))
-        calib_ds = calib_ds.select(range(n_calib)) if n_calib else calib_ds.select(range(0))
+        calib_ds = (
+            calib_ds.select(range(n_calib)) if n_calib else calib_ds.select(range(0))
+        )
         test_ds = test_ds.select(range(n_test)) if n_test else test_ds.select(range(0))
         splits_used = ["train"] * n_train + ["calib"] * n_calib + ["test"] * n_test
         ds = concatenate_datasets([train_ds, calib_ds, test_ds])
@@ -165,7 +194,9 @@ def main() -> None:
         labels = np.zeros(n, dtype=np.int64)
 
     print(f"Loading model {model_key} (4bit={args.load_4bit}) on {device}...")
-    model, tokenizer = load_model_and_tokenizer(model_key, device, load_in_4bit=args.load_4bit)
+    model, tokenizer = load_model_and_tokenizer(
+        model_key, device, load_in_4bit=args.load_4bit
+    )
     print(f"Extracting trajectories for {n} examples, layers {layer_list}...")
     per_layer, token_texts = extract_multi_layer_trajectories(
         model, tokenizer, texts, layer_list, cfg.max_length, device, cfg
