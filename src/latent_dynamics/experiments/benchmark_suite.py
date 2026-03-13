@@ -29,13 +29,13 @@ from latent_dynamics.experiments.kalman_conformal_experiment import (
 from latent_dynamics.experiments.kalman_conformal_experiment import (
     run_experiment as run_kalman,
 )
-from latent_dynamics.hub import activation_subpath, load_activations, save_activations
-from latent_dynamics.judge import JudgeCache, SafetyJudge, judge_texts
-from latent_dynamics.models import load_model_and_tokenizer, resolve_device
-from latent_dynamics.trajectory_features import (
+from latent_dynamics.experiments.trajectory_features import (
     signature_prefix_score_map,
     turning_angle_score_map,
 )
+from latent_dynamics.hub import activation_subpath, load_activations, save_activations
+from latent_dynamics.judge import JudgeCache, SafetyJudge, judge_texts
+from latent_dynamics.models import load_model_and_tokenizer, resolve_device
 
 
 @dataclass
@@ -678,7 +678,12 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
         p = out_root / activation_subpath(cfg.dataset_key, cfg.model_key, li)
         cfg_li = RunConfig(**{**run_cfg.__dict__, "layer_idx": li})
         save_activations(
-            p, per_layer[li], result.input_prompts, labels, token_texts, cfg_li,
+            p,
+            per_layer[li],
+            result.input_prompts,
+            labels,
+            token_texts,
+            cfg_li,
             generated_texts=result.generated_texts,
         )
         paths[li] = p
@@ -792,8 +797,8 @@ def run_benchmark(cfg: BenchmarkConfig) -> dict[str, Any]:
 
     runs: list[dict[str, Any]] = []
     for li in layers:
-        trajectories, _texts, labels, _tokens, _generated, source_cfg = load_activations(
-            layer_paths[li]
+        trajectories, _texts, labels, _tokens, _generated, source_cfg = (
+            load_activations(layer_paths[li])
         )
         if labels is None or len(np.unique(labels)) < 2:
             if labels is None:

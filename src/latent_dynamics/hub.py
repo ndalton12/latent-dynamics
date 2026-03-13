@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from safetensors.numpy import load_file, save_file
@@ -37,6 +38,7 @@ def save_activations(
     token_texts: list[list[str]],
     cfg: RunConfig,
     generated_texts: list[str | None] | None = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -54,6 +56,14 @@ def save_activations(
         "generated_texts": generated_texts,
         "n_trajectories": len(trajectories),
     }
+    if extra_metadata is not None:
+        overlap = set(metadata).intersection(extra_metadata)
+        if overlap:
+            overlap_s = ", ".join(sorted(overlap))
+            raise ValueError(
+                f"extra_metadata contains reserved key(s): {overlap_s}."
+            )
+        metadata.update(extra_metadata)
     (output_dir / METADATA_FILE).write_text(json.dumps(metadata, indent=2))
 
     return output_dir

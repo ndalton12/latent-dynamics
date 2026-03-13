@@ -7,13 +7,6 @@ from latent_dynamics.activations import (
     extract_multi_layer_trajectories,
     pool_trajectory,
 )
-from latent_dynamics.analysis import (
-    drift_curve,
-    fit_trust_region,
-    lat_scan,
-    make_direction,
-    train_linear_probe,
-)
 from latent_dynamics.config import (
     DATASET_REGISTRY,
     MODEL_REGISTRY,
@@ -42,17 +35,6 @@ from latent_dynamics.hub import (
     push_to_hub,
     save_activations,
 )
-from latent_dynamics.models import load_model_and_tokenizer, resolve_device
-from latent_dynamics.trajectory_features import (
-    BenignManifold,
-    compute_prefix_signatures,
-    compute_turning_angles,
-    fit_benign_manifold,
-    fit_trajectory_pca,
-    reduce_trajectories,
-    signature_prefix_score_map,
-    turning_angle_score_map,
-)
 from latent_dynamics.judge import (
     JudgeCache,
     JudgeResult,
@@ -61,7 +43,12 @@ from latent_dynamics.judge import (
     judge_texts,
     stable_text_hash,
 )
-from latent_dynamics.viz import plot_drift_curves, plot_lat_scans
+from latent_dynamics.models import load_model_and_tokenizer, resolve_device
+from latent_dynamics.viz import (
+    plot_drift_curves,
+    plot_layer_lat_heatmap,
+    plot_pca_subspace,
+)
 
 __all__ = [
     "RunConfig",
@@ -89,6 +76,8 @@ __all__ = [
     "make_direction",
     "plot_drift_curves",
     "plot_lat_scans",
+    "plot_layer_lat_heatmap",
+    "plot_pca_subspace",
     "pool_trajectory",
     "prepare_text_and_labels",
     "pull_from_hub",

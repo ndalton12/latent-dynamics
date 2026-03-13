@@ -192,9 +192,11 @@ def extract_multi_layer_trajectories(
                     )
                     generated_texts.append(
                         _decode_generated(
-                            seq_ids[i], prompt_len,
+                            seq_ids[i],
+                            prompt_len,
                             cfg.include_prompt_in_trajectory,
-                            tokenizer, tokenizer.pad_token_id,
+                            tokenizer,
+                            tokenizer.pad_token_id,
                         )
                     )
                     for li in layer_indices:
@@ -255,9 +257,11 @@ def extract_multi_layer_trajectories(
                 prompt_len = int(input_ids.shape[1])
                 generated_texts.append(
                     _decode_generated(
-                        seq_ids[0], prompt_len,
+                        seq_ids[0],
+                        prompt_len,
                         cfg.include_prompt_in_trajectory,
-                        tokenizer, tokenizer.pad_token_id,
+                        tokenizer,
+                        tokenizer.pad_token_id,
                     )
                 )
                 ids = seq_ids[0].cpu().tolist()
@@ -296,7 +300,11 @@ def extract_hidden_trajectories(
 ) -> ExtractionResult:
     """Convenience wrapper for a single layer."""
     return extract_multi_layer_trajectories(
-        model, tokenizer, texts, [layer_idx], cfg,
+        model,
+        tokenizer,
+        texts,
+        [layer_idx],
+        cfg,
     )
 
 

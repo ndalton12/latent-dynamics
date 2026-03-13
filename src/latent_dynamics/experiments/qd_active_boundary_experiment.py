@@ -1039,6 +1039,7 @@ def _candidate_record(
         "parent_prompt": cand.parent_prompt,
         "label": int(label),
         "judge_confidence": float(result.confidence),
+        "judge_compliance": bool(result.compliance),
         "judge_rationale": result.rationale,
         "query_index": int(cand.query_index),
         "measures": {
