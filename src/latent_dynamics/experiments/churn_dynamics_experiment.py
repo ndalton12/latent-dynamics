@@ -25,7 +25,7 @@ class ExperimentConfig:
     split: str = "train"
     layer_idx: int = 5
     max_samples: int = 120
-    max_length: int = 256
+    max_input_tokens: int = 256
     use_generate: bool = False
     max_new_tokens: int = 24
     include_prompt_in_trajectory: bool = True
@@ -60,7 +60,9 @@ def _parse_args() -> ExperimentConfig:
         ),
     )
     parser.add_argument("--activations", type=Path, default=None)
-    parser.add_argument("--model-key", choices=sorted(MODEL_REGISTRY.keys()), default="gemma3_4b")
+    parser.add_argument(
+        "--model-key", choices=sorted(MODEL_REGISTRY.keys()), default="gemma3_4b"
+    )
     parser.add_argument("--dataset-key", default="toy_contrastive")
     parser.add_argument("--split", default="train")
     parser.add_argument("--layer-idx", type=int, default=5)
@@ -89,7 +91,7 @@ def _parse_args() -> ExperimentConfig:
         split=args.split,
         layer_idx=args.layer_idx,
         max_samples=args.max_samples,
-        max_length=args.max_length,
+        max_input_tokens=args.max_input_tokens,
         use_generate=args.use_generate,
         max_new_tokens=args.max_new_tokens,
         include_prompt_in_trajectory=(not args.no_include_prompt),
@@ -111,24 +113,27 @@ def _prepare_trajectories(
     cfg: ExperimentConfig,
 ) -> tuple[list[np.ndarray], np.ndarray, RunConfig]:
     if cfg.activations is not None:
-        trajectories, _texts, labels, _tokens, run_cfg = load_activations(cfg.activations)
+        trajectories, _texts, labels, _tokens, _gen, run_cfg = load_activations(
+            cfg.activations
+        )
         if labels is None:
-            raise ValueError("Activations must include labels for safe/unsafe prediction.")
+            raise ValueError(
+                "Activations must include labels for safe/unsafe prediction."
+            )
         return trajectories, labels, run_cfg
 
     run_cfg = RunConfig(
         model_key=cfg.model_key,
         dataset_key=cfg.dataset_key,
-        split=cfg.split,
         max_samples=cfg.max_samples,
-        max_length=cfg.max_length,
+        max_input_tokens=cfg.max_input_tokens,
         layer_idx=cfg.layer_idx,
         device=resolve_device(cfg.device),
         use_generate=cfg.use_generate,
         max_new_tokens=cfg.max_new_tokens,
         include_prompt_in_trajectory=cfg.include_prompt_in_trajectory,
     )
-    ds, spec = load_examples(run_cfg.dataset_key, run_cfg.split, run_cfg.max_samples)
+    ds, spec = load_examples(run_cfg.dataset_key, run_cfg.max_samples)
     texts, labels = prepare_text_and_labels(
         ds,
         text_field=spec.text_field,
@@ -138,16 +143,17 @@ def _prepare_trajectories(
     if labels is None:
         raise ValueError("Dataset must provide labels for safe/unsafe prediction.")
 
-    model, tokenizer = load_model_and_tokenizer(run_cfg.model_key, run_cfg.device or "cpu")
-    trajectories, _tokens = extract_hidden_trajectories(
+    model, tokenizer = load_model_and_tokenizer(
+        run_cfg.model_key, run_cfg.device or "cpu"
+    )
+    result = extract_hidden_trajectories(
         model=model,
         tokenizer=tokenizer,
         texts=texts,
         layer_idx=run_cfg.layer_idx,
-        max_length=run_cfg.max_length,
-        device=run_cfg.device or "cpu",
         cfg=run_cfg,
     )
+    trajectories = result.per_layer[run_cfg.layer_idx]
     return trajectories, labels, run_cfg
 
 
@@ -190,14 +196,16 @@ def _split_indices(
         n_train = min(max(1, n_train), n - 2)
         n_calib = min(max(1, n_calib), n - n_train - 1)
         train_idx = perm[:n_train]
-        calib_idx = perm[n_train:n_train + n_calib]
-        heldout_idx = perm[n_train + n_calib:]
+        calib_idx = perm[n_train : n_train + n_calib]
+        heldout_idx = perm[n_train + n_calib :]
 
     return np.sort(train_idx), np.sort(calib_idx), np.sort(heldout_idx)
 
 
 def _collect_states(trajectories: list[np.ndarray], idxs: np.ndarray) -> np.ndarray:
-    return np.concatenate([trajectories[int(i)] for i in idxs], axis=0).astype(np.float32)
+    return np.concatenate([trajectories[int(i)] for i in idxs], axis=0).astype(
+        np.float32
+    )
 
 
 def _build_random_dictionary(
@@ -209,7 +217,7 @@ def _build_random_dictionary(
         raise ValueError("dictionary_dim must be >= 1.")
     rng = np.random.default_rng(seed)
     d = rng.normal(0.0, 1.0, size=(input_dim, dictionary_dim)).astype(np.float32)
-    d /= (np.linalg.norm(d, axis=0, keepdims=True) + 1e-8)
+    d /= np.linalg.norm(d, axis=0, keepdims=True) + 1e-8
     return d
 
 
@@ -326,7 +334,9 @@ def _build_prefix_score_matrix(
             top_k=model.top_k,
         )
         residual_prefix = _residual_prefix_score(
-            churn, bias=model.ar_bias, weight=model.ar_weight,
+            churn,
+            bias=model.ar_bias,
+            weight=model.ar_weight,
         )
         churn_scores[idx] = churn
         residual_scores[idx] = residual_prefix
@@ -351,7 +361,9 @@ def _calibrate_thresholds(
 
     thresholds: dict[int, float] = {}
     for p in range(1, max_p + 1):
-        vals = [prefix_scores[i][p - 1] for i in safe_idxs if len(prefix_scores[i]) >= p]
+        vals = [
+            prefix_scores[i][p - 1] for i in safe_idxs if len(prefix_scores[i]) >= p
+        ]
         if vals:
             thresholds[p] = _conformal_quantile(np.array(vals, dtype=np.float32), alpha)
     if not thresholds:
@@ -408,15 +420,13 @@ def _evaluate_prefix_detection(
         y = np.array([labels[i] for i in valid], dtype=np.int64)
         pred = np.array(
             [
-                1
-                if (first_hit[i] is not None and first_hit[i] <= p)
-                else 0
+                1 if (first_hit[i] is not None and first_hit[i] <= p) else 0
                 for i in valid
             ],
             dtype=np.int64,
         )
-        safe_mask = (y == 0)
-        unsafe_mask = (y == 1)
+        safe_mask = y == 0
+        unsafe_mask = y == 1
         fpr = float(pred[safe_mask].mean()) if np.any(safe_mask) else float("nan")
         tpr = float(pred[unsafe_mask].mean()) if np.any(unsafe_mask) else float("nan")
         f1 = _binary_f1(y, pred)
@@ -458,11 +468,13 @@ def _evaluate_prefix_detection(
         ),
         "median_first_detect_prefix_unsafe": (
             float(np.median(np.array(unsafe_hits, dtype=np.float32)))
-            if unsafe_hits else None
+            if unsafe_hits
+            else None
         ),
         "mean_first_detect_prefix_unsafe": (
             float(np.mean(np.array(unsafe_hits, dtype=np.float32)))
-            if unsafe_hits else None
+            if unsafe_hits
+            else None
         ),
         "final_prefix_auroc": auroc_final,
         "f1_at_max_prefix": f1_at_max_prefix,
@@ -512,9 +524,13 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
     )
 
     if cfg.train_dynamics_on_safe_only:
-        fit_idx = np.array([i for i in train_idx if labels[int(i)] == 0], dtype=np.int64)
+        fit_idx = np.array(
+            [i for i in train_idx if labels[int(i)] == 0], dtype=np.int64
+        )
         if len(fit_idx) < 2:
-            raise ValueError("Need at least 2 safe train trajectories for safe-only dynamics.")
+            raise ValueError(
+                "Need at least 2 safe train trajectories for safe-only dynamics."
+            )
     else:
         fit_idx = train_idx.astype(np.int64)
 
@@ -538,8 +554,12 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
         ar_weight=ar_weight,
     )
 
-    calib_churn, calib_prefix = _build_prefix_score_matrix(trajectories, calib_idx, model)
-    heldout_churn, heldout_prefix = _build_prefix_score_matrix(trajectories, heldout_idx, model)
+    calib_churn, calib_prefix = _build_prefix_score_matrix(
+        trajectories, calib_idx, model
+    )
+    heldout_churn, heldout_prefix = _build_prefix_score_matrix(
+        trajectories, heldout_idx, model
+    )
 
     thresholds, max_calibrated_prefix = _calibrate_thresholds(
         prefix_scores=calib_prefix,
@@ -564,7 +584,9 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
         max_prefix=max_calibrated_prefix,
     )
 
-    def _mean_last_prefix(prefix_map: dict[int, np.ndarray], ids: np.ndarray, y: int) -> float | None:
+    def _mean_last_prefix(
+        prefix_map: dict[int, np.ndarray], ids: np.ndarray, y: int
+    ) -> float | None:
         vals = [
             float(prefix_map[int(i)][-1])
             for i in ids
@@ -612,14 +634,28 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
             "thresholds": {str(k): float(v) for k, v in thresholds.items()},
         },
         "churn_summary": {
-            "calib_mean_last_prefix_safe": _mean_last_prefix(calib_prefix, calib_idx, y=0),
-            "calib_mean_last_prefix_unsafe": _mean_last_prefix(calib_prefix, calib_idx, y=1),
-            "heldout_mean_last_prefix_safe": _mean_last_prefix(heldout_prefix, heldout_idx, y=0),
-            "heldout_mean_last_prefix_unsafe": _mean_last_prefix(heldout_prefix, heldout_idx, y=1),
+            "calib_mean_last_prefix_safe": _mean_last_prefix(
+                calib_prefix, calib_idx, y=0
+            ),
+            "calib_mean_last_prefix_unsafe": _mean_last_prefix(
+                calib_prefix, calib_idx, y=1
+            ),
+            "heldout_mean_last_prefix_safe": _mean_last_prefix(
+                heldout_prefix, heldout_idx, y=0
+            ),
+            "heldout_mean_last_prefix_unsafe": _mean_last_prefix(
+                heldout_prefix, heldout_idx, y=1
+            ),
             "calib_mean_raw_churn_safe": _mean_last_prefix(calib_churn, calib_idx, y=0),
-            "calib_mean_raw_churn_unsafe": _mean_last_prefix(calib_churn, calib_idx, y=1),
-            "heldout_mean_raw_churn_safe": _mean_last_prefix(heldout_churn, heldout_idx, y=0),
-            "heldout_mean_raw_churn_unsafe": _mean_last_prefix(heldout_churn, heldout_idx, y=1),
+            "calib_mean_raw_churn_unsafe": _mean_last_prefix(
+                calib_churn, calib_idx, y=1
+            ),
+            "heldout_mean_raw_churn_safe": _mean_last_prefix(
+                heldout_churn, heldout_idx, y=0
+            ),
+            "heldout_mean_raw_churn_unsafe": _mean_last_prefix(
+                heldout_churn, heldout_idx, y=1
+            ),
         },
         "prefix_stats_calib": calib_eval,
         "prefix_stats_heldout": heldout_eval,

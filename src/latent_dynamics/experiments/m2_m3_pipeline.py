@@ -231,7 +231,7 @@ def fit_trust_region_only(
     model_output: Path | None = None,
     seed: int = 42,
 ) -> dict[str, Any]:
-    trajectories, _texts, labels, _tokens, run_cfg = load_activations(activations)
+    trajectories, _texts, labels, _tokens, _gen, run_cfg = load_activations(activations)
     if labels is None:
         raise ValueError("Activations must contain labels.")
     train_idx, calib_idx, test_idx = split_indices_70_15_15(labels, seed=seed)
@@ -262,7 +262,7 @@ def compute_drift_only(
 ) -> dict[str, Any]:
     from latent_dynamics.dynamics import load_trust_region_model
 
-    trajectories, _texts, labels, _tokens, _cfg = load_activations(activations)
+    trajectories, _texts, labels, _tokens, _gen, _cfg = load_activations(activations)
     if labels is None:
         raise ValueError("Activations must contain labels.")
     _train_idx, calib_idx, test_idx = split_indices_70_15_15(labels, seed=seed)
@@ -302,7 +302,7 @@ def compute_drift_only(
 
 
 def run_pipeline(cfg: PipelineConfig) -> dict[str, Any]:
-    trajectories, _texts, labels, _tokens, run_cfg = load_activations(cfg.activations)
+    trajectories, _texts, labels, _tokens, _gen, run_cfg = load_activations(cfg.activations)
     if labels is None:
         raise ValueError("Activations must contain labels for Milestone 2/3 pipeline.")
 
@@ -383,7 +383,7 @@ def run_pipeline(cfg: PipelineConfig) -> dict[str, Any]:
 
     shift_eval = None
     if cfg.shifted_activations is not None:
-        s_traj, _stext, s_labels, _stok, _scfg = load_activations(cfg.shifted_activations)
+        s_traj, _stext, s_labels, _stok, _sgen, _scfg = load_activations(cfg.shifted_activations)
         if s_labels is not None:
             s_scores = trust_region_scores(s_traj, model)
             in_scores = trust_region_scores([trajectories[int(i)] for i in test_idx], model)

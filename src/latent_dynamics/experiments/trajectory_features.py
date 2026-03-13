@@ -18,6 +18,7 @@ Both produce dict[int, np.ndarray] score maps (prompt index -> per-prefix
 scores) that are directly compatible with the benchmark suite's
 _calibrate_prefix_thresholds and _evaluate_detection functions.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -29,10 +30,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-
 # ---------------------------------------------------------------------------
 # Shared PCA reduction
 # ---------------------------------------------------------------------------
+
 
 def fit_trajectory_pca(
     trajectories: list[np.ndarray],
@@ -46,9 +47,9 @@ def fit_trajectory_pca(
     sees the full distribution of token representations, not just pooled
     representations.
     """
-    states = np.concatenate(
-        [trajectories[int(i)] for i in train_idx], axis=0
-    ).astype(np.float32)
+    states = np.concatenate([trajectories[int(i)] for i in train_idx], axis=0).astype(
+        np.float32
+    )
     max_components = int(min(states.shape[0], states.shape[1]))
     effective_n = int(min(n_components, max_components))
     if effective_n < 1:
@@ -70,6 +71,7 @@ def reduce_trajectories(
 # Geometric turning-angle features
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class BenignManifold:
     """Low-rank linear approximation of the safe activation distribution.
@@ -78,13 +80,14 @@ class BenignManifold:
         mean:   (d,)    centroid of safe states
         basis:  (d, r)  top-r eigenvectors (columns) of safe state covariance
     """
+
     mean: np.ndarray
     basis: np.ndarray
 
     def project(self, h: np.ndarray) -> np.ndarray:
         """Project h onto the manifold subspace. h shape: (..., d)."""
         centered = h - self.mean
-        coords = centered @ self.basis          # (..., r)
+        coords = centered @ self.basis  # (..., r)
         return self.mean + coords @ self.basis.T  # (..., d)
 
     def residual(self, h: np.ndarray) -> np.ndarray:
@@ -105,7 +108,9 @@ def fit_benign_manifold(
     """
     safe_idx = [int(i) for i in train_idx if labels[int(i)] == 0]
     if len(safe_idx) < 2:
-        raise ValueError("Need at least 2 safe training trajectories to fit benign manifold.")
+        raise ValueError(
+            "Need at least 2 safe training trajectories to fit benign manifold."
+        )
 
     safe_states = np.concatenate(
         [trajectories_pca[i] for i in safe_idx], axis=0
@@ -146,7 +151,7 @@ def compute_turning_angles(
         return np.array([], dtype=np.float32)
 
     tangents = np.diff(trajectory, axis=0).astype(np.float32)  # (T-1, d)
-    normals = manifold.residual(trajectory[:-1]).astype(np.float32)   # (T-1, d)
+    normals = manifold.residual(trajectory[:-1]).astype(np.float32)  # (T-1, d)
 
     tau_norms = np.linalg.norm(tangents, axis=1, keepdims=True)
     n_norms = np.linalg.norm(normals, axis=1, keepdims=True)
@@ -179,7 +184,9 @@ def turning_angle_score_map(
     Fits manifold on safe training states only, so no label leakage at
     inference time.
     """
-    pca = fit_trajectory_pca(trajectories, train_idx, n_components=pca_n_components, seed=seed)
+    pca = fit_trajectory_pca(
+        trajectories, train_idx, n_components=pca_n_components, seed=seed
+    )
     trajs_pca = reduce_trajectories(trajectories, pca)
     manifold = fit_benign_manifold(trajs_pca, train_idx, labels, rank=manifold_rank)
 
@@ -204,9 +211,11 @@ def turning_angle_score_map(
 # Path signature features
 # ---------------------------------------------------------------------------
 
+
 def _check_iisignature() -> Any:
     try:
         import iisignature
+
         return iisignature
     except ImportError as e:
         raise ImportError(
@@ -274,7 +283,9 @@ def signature_prefix_score_map(
     """
     iisignature = _check_iisignature()  # noqa: F841 -- validate import early
 
-    pca = fit_trajectory_pca(trajectories, train_idx, n_components=pca_n_components, seed=seed)
+    pca = fit_trajectory_pca(
+        trajectories, train_idx, n_components=pca_n_components, seed=seed
+    )
     trajs_pca = reduce_trajectories(trajectories, pca)
 
     max_len = min(max_prefix, max(int(t.shape[0]) for t in trajs_pca))
@@ -298,12 +309,17 @@ def signature_prefix_score_map(
             sigs.append(prefix_sigs[p])
         else:
             X = np.stack(sigs, axis=0)
-            clf = Pipeline([
-                ("scaler", StandardScaler()),
-                ("clf", LogisticRegression(
-                    max_iter=2000, class_weight="balanced", random_state=seed
-                )),
-            ])
+            clf = Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    (
+                        "clf",
+                        LogisticRegression(
+                            max_iter=2000, class_weight="balanced", random_state=seed
+                        ),
+                    ),
+                ]
+            )
             clf.fit(X, y)
             per_prefix_models[p] = clf
 

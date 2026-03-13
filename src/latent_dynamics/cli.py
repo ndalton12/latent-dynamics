@@ -15,6 +15,8 @@ app = typer.Typer(
     add_completion=False,
 )
 
+DEFAULT_GENERATION_JUDGE_MODEL = "gpt-5-mini"
+
 
 class ModelKey(str, Enum):
     qwen3_8b = "qwen3_8b"
@@ -26,7 +28,6 @@ class DatasetKey(str, Enum):
     toy_contrastive = "toy_contrastive"
     wildjailbreak = "wildjailbreak"
     xstest = "xstest"
-    harmbench = "harmbench"
 
 
 class DirectionMethod(str, Enum):
@@ -49,17 +50,23 @@ def extract(
     dataset: Annotated[
         DatasetKey, typer.Option(help="Dataset key from registry.")
     ] = DatasetKey.toy_contrastive,
-    split: Annotated[str, typer.Option(help="Dataset split.")] = "train",
     layer: Annotated[
         Optional[list[int]],
         typer.Option(help="Layer index (repeat for multiple: --layer 5 --layer 10)."),
     ] = None,
+    all_layers: Annotated[
+        bool,
+        typer.Option("--all-layers/--no-all-layers", help="Extract all layers."),
+    ] = False,
     max_samples: Annotated[int, typer.Option(help="Maximum number of examples.")] = 120,
-    max_length: Annotated[
+    max_input_tokens: Annotated[
         int, typer.Option(help="Maximum token sequence length.")
     ] = 256,
     output: Annotated[
-        Path, typer.Option(help="Root output directory. Activations are saved under {dataset}/{split}/{model}/layer_{N}/.")
+        Path,
+        typer.Option(
+            help="Root output directory. Activations are saved under {dataset}/{model}/layer_{N}/."
+        ),
     ] = Path("./activations"),
     push_to_hub: Annotated[
         Optional[str], typer.Option(help="HuggingFace Hub repo id (e.g. user/repo).")
@@ -69,6 +76,17 @@ def extract(
     ] = None,
     use_generate: Annotated[
         bool, typer.Option(help="Generate continuation before extracting.")
+    ] = False,
+    judge_generations: Annotated[
+        bool,
+        typer.Option(
+            "--judge-generations",
+            help=(
+                "Judge generated responses and store judge labels in metadata. "
+                f"Uses {DEFAULT_GENERATION_JUDGE_MODEL}."
+            ),
+            is_flag=True,
+        ),
     ] = False,
     max_new_tokens: Annotated[
         int, typer.Option(help="Tokens to generate (requires --use-generate).")
@@ -82,34 +100,53 @@ def extract(
     ] = True,
     load_4bit: Annotated[
         bool,
-        typer.Option("--4bit/--no-4bit", help="Load model in 4-bit (CUDA + bitsandbytes)."),
+        typer.Option(
+            "--4bit/--no-4bit", help="Load model in 4-bit (CUDA + bitsandbytes)."
+        ),
     ] = False,
 ) -> None:
     """Extract hidden-state trajectories from a model and dataset, save to disk.
 
     Activations are stored under a structured path:
-      {output}/{dataset}/{split}/{model}/layer_{N}/
-    This layout is mirrored when pushing to HuggingFace Hub.
+      {output}/{dataset}/{model}/layer_{N}/
+    Each layer directory contains a metadata.json that records the layer index,
+    input prompts, and generated text (when using --use-generate) so that
+    activations can be matched back to their source data. With
+    --judge-generations, metadata also includes judge labels for unsafe and
+    compliance/refusal.
     """
     from latent_dynamics.activations import extract_multi_layer_trajectories
     from latent_dynamics.config import RunConfig
     from latent_dynamics.data import load_examples, prepare_text_and_labels
     from latent_dynamics.hub import (
         activation_subpath,
-        push_to_hub as _push,
         save_activations,
     )
+    from latent_dynamics.hub import (
+        push_to_hub as _push,
+    )
+    from latent_dynamics.judge import SafetyJudge, judge_prompt_generations
     from latent_dynamics.models import load_model_and_tokenizer, resolve_device
 
-    layer_indices = layer if layer else [5]
+    if judge_generations and not use_generate:
+        raise typer.BadParameter(
+            "--judge-generations requires --use-generate so completions exist."
+        )
+
+    layer_indices: list[int] | None = None
+    if all_layers:
+        layer_indices = None
+    elif layer:
+        layer_indices = layer
+    else:
+        layer_indices = [5]
 
     cfg = RunConfig(
         model_key=model.value,
         dataset_key=dataset.value,
-        split=split,
         max_samples=max_samples,
-        max_length=max_length,
-        layer_idx=layer_indices[0],
+        max_input_tokens=max_input_tokens,
+        layer_idx=layer_indices[0] if layer_indices else 0,
         device=resolve_device(device),
         use_generate=use_generate,
         max_new_tokens=max_new_tokens,
@@ -118,12 +155,10 @@ def extract(
 
     typer.echo(f"Device: {cfg.device}")
     typer.echo(f"Model:  {cfg.model_key}")
-    typer.echo(
-        f"Dataset: {cfg.dataset_key} (split={cfg.split}, max_samples={cfg.max_samples})"
-    )
-    typer.echo(f"Layers:  {layer_indices}")
+    typer.echo(f"Dataset: {cfg.dataset_key} (max_samples={cfg.max_samples})")
+    typer.echo(f"Layers:  {'all' if layer_indices is None else layer_indices}")
 
-    ds, spec = load_examples(cfg.dataset_key, cfg.split, cfg.max_samples)
+    ds, spec = load_examples(cfg.dataset_key, cfg.max_samples)
     texts, labels = prepare_text_and_labels(
         ds,
         text_field=spec.text_field,
@@ -142,21 +177,68 @@ def extract(
         cfg.model_key, cfg.device, load_in_4bit=load_4bit
     )
 
-    typer.echo(f"Extracting trajectories for layers {layer_indices} (single forward pass)...")
-    per_layer, token_texts = extract_multi_layer_trajectories(
-        mdl, tokenizer, texts,
+    typer.echo(
+        f"Extracting trajectories for layers "
+        f"{'all' if layer_indices is None else layer_indices} ..."
+    )
+    result = extract_multi_layer_trajectories(
+        mdl,
+        tokenizer,
+        texts,
         layer_indices=layer_indices,
-        max_length=cfg.max_length,
-        device=cfg.device,
         cfg=cfg,
     )
-    typer.echo(f"Extracted {len(texts)} trajectories x {len(layer_indices)} layers.")
+    extracted_layers = sorted(result.per_layer.keys())
+    typer.echo(f"Extracted {len(texts)} trajectories x {len(extracted_layers)} layers.")
 
-    for li in layer_indices:
-        sub = activation_subpath(cfg.dataset_key, cfg.split, cfg.model_key, li)
+    extra_metadata: dict[str, object] | None = None
+    if judge_generations:
+        typer.echo(
+            f"Judging {len(texts)} generations with {DEFAULT_GENERATION_JUDGE_MODEL}..."
+        )
+        judge = SafetyJudge(
+            model=DEFAULT_GENERATION_JUDGE_MODEL,
+            max_concurrency=12,
+            batch_size=32,
+            requests_per_minute=120,
+            show_progress=True,
+        )
+        judge_results = judge_prompt_generations(
+            prompts=texts,
+            generations=result.generated_texts,
+            judge=judge,
+            cache=None,
+        )
+        unsafe_labels = [int(r.unsafe) for r in judge_results]
+        compliance_labels = [int(r.compliance) for r in judge_results]
+        confidences = [float(r.confidence) for r in judge_results]
+        n_unsafe = sum(unsafe_labels)
+        n_compliance = sum(compliance_labels)
+        typer.echo(
+            f"Judge summary: unsafe={n_unsafe} safe={len(judge_results) - n_unsafe} "
+            f"compliance={n_compliance} refusal={len(judge_results) - n_compliance}"
+        )
+        extra_metadata = {
+            "judge_model": DEFAULT_GENERATION_JUDGE_MODEL,
+            "judge_unsafe_labels": unsafe_labels,
+            "judge_compliance_labels": compliance_labels,
+            "judge_confidences": confidences,
+        }
+
+    for li in extracted_layers:
+        sub = activation_subpath(cfg.dataset_key, cfg.model_key, li)
         layer_dir = output / sub
         layer_cfg = RunConfig(**{**cfg.__dict__, "layer_idx": li})
-        save_activations(layer_dir, per_layer[li], texts, labels, token_texts, layer_cfg)
+        save_activations(
+            layer_dir,
+            result.per_layer[li],
+            texts,
+            labels,
+            result.token_texts,
+            layer_cfg,
+            generated_texts=result.generated_texts,
+            extra_metadata=extra_metadata,
+        )
         typer.echo(f"  Saved layer {li} -> {layer_dir}")
 
     if push_to_hub:
@@ -164,243 +246,19 @@ def extract(
         typer.echo(f"Pushed to {url}")
 
 
-@app.command()
-def analyze(
-    activations: Annotated[
-        Optional[Path],
-        typer.Option(help="Local activations directory (leaf path with metadata.json)."),
-    ] = None,
-    from_hub: Annotated[
-        Optional[str],
-        typer.Option(help="HuggingFace Hub repo id to pull activations from."),
-    ] = None,
-    hub_dataset: Annotated[
-        Optional[str],
-        typer.Option(help="Dataset key for Hub path resolution (with --from-hub)."),
-    ] = None,
-    hub_model: Annotated[
-        Optional[str],
-        typer.Option(help="Model key for Hub path resolution (with --from-hub)."),
-    ] = None,
-    hub_split: Annotated[
-        Optional[str],
-        typer.Option(help="Split for Hub path resolution (with --from-hub)."),
-    ] = None,
-    hub_layer: Annotated[
-        Optional[int],
-        typer.Option(help="Layer index for Hub path resolution (with --from-hub)."),
-    ] = None,
-    direction: Annotated[
-        DirectionMethod, typer.Option(help="Direction method for LAT scan.")
-    ] = DirectionMethod.probe_weight,
-    pooling: Annotated[
-        PoolingMode, typer.Option(help="Trajectory pooling mode for feature matrix.")
-    ] = PoolingMode.last,
-    test_size: Annotated[float, typer.Option(help="Fraction for test split.")] = 0.25,
-    calib_size: Annotated[
-        float, typer.Option(help="Fraction for calibration split.")
-    ] = 0.25,
-    trust_region: Annotated[
-        bool,
-        typer.Option(
-            "--trust-region/--no-trust-region",
-            help="Compute and plot trust-region drift.",
-        ),
-    ] = True,
-    save_plots: Annotated[
-        Optional[Path], typer.Option(help="Directory to save HTML plots.")
-    ] = None,
-    max_traces: Annotated[int, typer.Option(help="Max traces in each plot.")] = 16,
-    random_state: Annotated[int, typer.Option(help="Random seed.")] = 7,
-) -> None:
-    """Analyze stored activation trajectories: train probe, LAT scan, visualize.
-
-    Use --activations to point to a local leaf directory, or --from-hub with
-    --hub-dataset, --hub-model, --hub-split, --hub-layer to pull a specific
-    slice from HuggingFace Hub.
-    """
-    from latent_dynamics.activations import build_feature_matrix
-    from latent_dynamics.analysis import (
-        drift_curve,
-        fit_trust_region,
-        lat_scan,
-        make_direction,
-        train_linear_probe,
-    )
-    from latent_dynamics.hub import (
-        activation_subpath,
-        load_activations,
-        pull_from_hub,
-    )
-    from latent_dynamics.viz import plot_drift_curves, plot_lat_scans
-
-    if activations is None and from_hub is None:
-        typer.echo("Provide --activations or --from-hub.", err=True)
-        raise typer.Exit(code=1)
-
-    if from_hub and activations is None:
-        for name, val in [
-            ("--hub-dataset", hub_dataset),
-            ("--hub-model", hub_model),
-            ("--hub-split", hub_split),
-            ("--hub-layer", hub_layer),
-        ]:
-            if val is None:
-                typer.echo(f"{name} is required when using --from-hub.", err=True)
-                raise typer.Exit(code=1)
-
-        assert hub_dataset and hub_model and hub_split and hub_layer is not None
-        sub = activation_subpath(hub_dataset, hub_split, hub_model, hub_layer)
-        activations = Path(f".cache/hub/{from_hub.replace('/', '__')}") / sub
-        typer.echo(f"Pulling from Hub: {from_hub} / {sub}")
-        pull_from_hub(from_hub, activations, path_in_repo=str(sub))
-
-    assert activations is not None
-    trajectories, texts, labels, token_texts, cfg = load_activations(activations)
-    typer.echo(f"Loaded {len(trajectories)} trajectories from {activations}")
-    typer.echo(f"  model={cfg.model_key}  dataset={cfg.dataset_key}  layer={cfg.layer_idx}")
-
-    if labels is None:
-        typer.echo(
-            "No labels found -- cannot train probe or compute directions.", err=True
-        )
-        raise typer.Exit(code=1)
-
-    X = build_feature_matrix(trajectories, pooling.value)
-    typer.echo(f"Feature matrix shape: {X.shape}")
-
-    probe, (X_train, y_train), (X_calib, y_calib), (X_test, y_test), metrics = (
-        train_linear_probe(X, labels, test_size, calib_size, random_state)
-    )
-    typer.echo(
-        f"Probe accuracy: {metrics['accuracy']:.3f}  ROC-AUC: {metrics['roc_auc']:.3f}"
-    )
-    typer.echo(metrics["report"])
-
-    dir_vec = make_direction(direction.value, X_train, y_train, probe)
-    scans = lat_scan(trajectories, dir_vec)
-
-    scan_path = (save_plots / "lat_scans") if save_plots else None
-    fig_scan = plot_lat_scans(
-        scans,
-        labels,
-        max_traces=max_traces,
-        title=f"LAT scan — {cfg.model_key} / {cfg.dataset_key} / L{cfg.layer_idx} / {direction.value}",
-        save_path=scan_path,
-    )
-    if save_plots:
-        typer.echo(f"Saved LAT scan plot to {scan_path}.html")
-    else:
-        fig_scan.show()
-
-    if trust_region:
-        try:
-            safe_center, tau = fit_trust_region(X_calib, y_calib)
-        except ValueError as e:
-            typer.echo(f"Skipping trust region: {e}", err=True)
-            return
-
-        drifts = [drift_curve(t, safe_center) for t in trajectories]
-
-        drift_path = (save_plots / "drift_curves") if save_plots else None
-        fig_drift = plot_drift_curves(
-            drifts,
-            labels,
-            tau,
-            max_traces=max_traces,
-            title=f"Trust-region drift — {cfg.model_key} / {cfg.dataset_key} / L{cfg.layer_idx}",
-            save_path=drift_path,
-        )
-        if save_plots:
-            typer.echo(f"Saved drift plot to {drift_path}.html")
-        else:
-            fig_drift.show()
-
-
-@app.command("qd-active")
-def qd_active(
-    model: Annotated[
-        ModelKey, typer.Option(help="Target model key for rollout latent extraction.")
-    ] = ModelKey.gemma3_4b,
-    layer: Annotated[int, typer.Option(help="Layer index for latent trajectories.")] = 5,
-    label_budget: Annotated[int, typer.Option(help="Total labeling budget.")] = 1000,
-    warm_start_labels: Annotated[
-        int, typer.Option(help="Initial labeled pool size before active learning.")
-    ] = 128,
-    batch_size: Annotated[int, typer.Option(help="Labels acquired per iteration.")] = 32,
-    candidate_pool_size: Annotated[
-        int, typer.Option(help="Candidate prompts generated per iteration.")
-    ] = 128,
-    rollout_batch_size: Annotated[
-        int, typer.Option(help="Prompt rollout extraction batch size.")
-    ] = 16,
-    proxy_model: Annotated[
-        str, typer.Option(help="Proxy model used by flashlite for mutation/judging.")
-    ] = "gpt-5-mini",
-    proxy_batch_size: Annotated[
-        int, typer.Option(help="flashlite request batch size per complete_many call.")
-    ] = 32,
-    template_dir: Annotated[
-        Optional[Path],
-        typer.Option(help="Optional flashlite Jinja template directory override."),
-    ] = None,
-    output_root: Annotated[
-        Path, typer.Option(help="Directory root for run artifacts.")
-    ] = Path(".cache/qd_active"),
-    output_json: Annotated[
-        Optional[Path], typer.Option(help="Optional path to write final JSON report.")
-    ] = None,
-    device: Annotated[
-        Optional[str], typer.Option(help="Device override (cuda/mps/cpu).")
-    ] = None,
-    show_progress: Annotated[
-        bool,
-        typer.Option(
-            "--progress/--no-progress",
-            help="Enable or disable tqdm progress bars.",
-        ),
-    ] = True,
-    random_state: Annotated[int, typer.Option(help="Random seed.")] = 7,
-) -> None:
-    """Run QD-driven active boundary learning with Bayesian logistic probes."""
-    from latent_dynamics.experiments.qd_active_boundary_experiment import (
-        ExperimentConfig,
-        run_experiment,
-    )
-
-    cfg = ExperimentConfig(
-        model_key=model.value,
-        layer_idx=layer,
-        label_budget=label_budget,
-        warm_start_labels=warm_start_labels,
-        batch_size=batch_size,
-        candidate_pool_size=candidate_pool_size,
-        rollout_batch_size=rollout_batch_size,
-        proxy_model=proxy_model,
-        proxy_batch_size=proxy_batch_size,
-        template_dir=template_dir,
-        output_root=output_root,
-        output_json=output_json,
-        device=device,
-        show_progress=show_progress,
-        random_state=random_state,
-    )
-    report = run_experiment(cfg)
-    text = json.dumps(report, indent=2, default=str)
-    typer.echo(text)
-    if output_json is not None:
-        typer.echo(f"Wrote report to {output_json}")
-
-
 @app.command("run-safety-pipeline")
 def run_safety_pipeline(
     activations: Annotated[
         Path,
-        typer.Option(help="Local activations leaf directory for train/calib/test split."),
+        typer.Option(
+            help="Local activations leaf directory for train/calib/test split."
+        ),
     ],
     shifted_activations: Annotated[
         Optional[Path],
-        typer.Option(help="Optional shifted-domain activations for generator-shift AUROC."),
+        typer.Option(
+            help="Optional shifted-domain activations for generator-shift AUROC."
+        ),
     ] = None,
     output_dir: Annotated[
         Path,
@@ -408,7 +266,9 @@ def run_safety_pipeline(
     ] = Path("experiments/outputs"),
     model: Annotated[
         Optional[ModelKey],
-        typer.Option(help="Optional model key sanity check against activations metadata."),
+        typer.Option(
+            help="Optional model key sanity check against activations metadata."
+        ),
     ] = None,
     model_output: Annotated[
         Optional[Path],
@@ -554,11 +414,15 @@ def compute_drift_cmd(
 def milestone23_backward_compat(
     activations: Annotated[
         Path,
-        typer.Option(help="Local activations leaf directory for train/calib/test split."),
+        typer.Option(
+            help="Local activations leaf directory for train/calib/test split."
+        ),
     ],
     shifted_activations: Annotated[
         Optional[Path],
-        typer.Option(help="Optional shifted-domain activations for generator-shift AUROC."),
+        typer.Option(
+            help="Optional shifted-domain activations for generator-shift AUROC."
+        ),
     ] = None,
     output_dir: Annotated[
         Path,
@@ -566,7 +430,9 @@ def milestone23_backward_compat(
     ] = Path("experiments/outputs"),
     model: Annotated[
         Optional[ModelKey],
-        typer.Option(help="Optional model key sanity check against activations metadata."),
+        typer.Option(
+            help="Optional model key sanity check against activations metadata."
+        ),
     ] = None,
     model_output: Annotated[
         Optional[Path],

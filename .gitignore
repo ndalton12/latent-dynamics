@@ -12,3 +12,4 @@ wheels/
 .env
 activations/
 .cache/
+figures/

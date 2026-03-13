@@ -8,9 +8,8 @@ from typing import Any, Callable
 class RunConfig:
     model_key: str = "gemma3_4b"
     dataset_key: str = "toy_contrastive"
-    split: str = "train"
     max_samples: int = 120
-    max_length: int = 256
+    max_input_tokens: int = 256
     layer_idx: int = 5
     pooling: str = "last"  # last | mean | max_norm
     direction_method: str = "probe_weight"  # probe_weight | mean_diff | pca
@@ -21,8 +20,8 @@ class RunConfig:
 
     use_generate: bool = False
     max_new_tokens: int = 24
-    do_sample: bool = False
-    temperature: float = 0.8
+    do_sample: bool = True
+    temperature: float = 0.6
     top_p: float = 0.95
     include_prompt_in_trajectory: bool = True
     use_true_batch_inference: bool = False
@@ -118,58 +117,36 @@ TOY_CONTRASTIVE = [
 ]
 
 
-def _wildjailbreak_label_fn(row: dict[str, Any]) -> int:
-    return int("harmful" in str(row.get("data_type", "")))
-
-
 def _xstest_label_fn(row: dict[str, Any]) -> int:
     return int(str(row.get("label", "")).strip().lower() == "unsafe")
 
 
-def _harmbench_label_fn(row: dict[str, Any]) -> int:
-    """HarmBench: 1 if harmful/unsafe prompt, 0 if safe. Uses 'label' or 'is_safe' if present."""
-    label = row.get("label")
-    if label is not None:
-        return int(str(label).strip().lower() in ("1", "unsafe", "harmful", "true"))
-    is_safe = row.get("is_safe")
-    if is_safe is not None:
-        return 0 if is_safe else 1
-    return 1  # default: red-team prompts treated as unsafe
-
-
 @dataclass
 class DatasetSpec:
-    loader: str  # "toy" | "hf"
     text_field: str
     label_field: str | None = None
     label_fn: Callable[[dict[str, Any]], int] | None = None
     path: str | None = None
-    name: str | None = None
+    split: str | None = None
 
 
 DATASET_REGISTRY: dict[str, DatasetSpec] = {
     "toy_contrastive": DatasetSpec(
-        loader="toy",
+        path="toy_contrastive",
         text_field="text",
         label_field="label",
     ),
     "wildjailbreak": DatasetSpec(
-        loader="hf",
         path="allenai/wildjailbreak",
-        text_field="prompt",
-        label_fn=_wildjailbreak_label_fn,
+        split="eval",
+        text_field="adversarial",
+        label_field="label",
     ),
     "xstest": DatasetSpec(
-        loader="hf",
         path="walledai/XSTest",
+        split="test",
         text_field="prompt",
         label_fn=_xstest_label_fn,
-    ),
-    "harmbench": DatasetSpec(
-        loader="hf",
-        path="walledai/HarmBench",
-        text_field="prompt",
-        label_fn=_harmbench_label_fn,
     ),
 }
 

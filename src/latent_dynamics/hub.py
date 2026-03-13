@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from safetensors.numpy import load_file, save_file
@@ -22,12 +23,11 @@ METADATA_FILE = "metadata.json"
 
 def activation_subpath(
     dataset_key: str,
-    split: str,
     model_key: str,
     layer_idx: int,
 ) -> Path:
-    """Canonical relative path: ``{dataset}/{split}/{model}/layer_{N}``."""
-    return Path(dataset_key) / split / model_key / f"layer_{layer_idx}"
+    """Canonical relative path: ``{dataset}/{model}/layer_{N}``."""
+    return Path(dataset_key) / model_key / f"layer_{layer_idx}"
 
 
 def save_activations(
@@ -37,6 +37,8 @@ def save_activations(
     labels: np.ndarray | None,
     token_texts: list[list[str]],
     cfg: RunConfig,
+    generated_texts: list[str | None] | None = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -51,8 +53,17 @@ def save_activations(
         "texts": texts,
         "labels": labels.tolist() if labels is not None else None,
         "token_texts": token_texts,
+        "generated_texts": generated_texts,
         "n_trajectories": len(trajectories),
     }
+    if extra_metadata is not None:
+        overlap = set(metadata).intersection(extra_metadata)
+        if overlap:
+            overlap_s = ", ".join(sorted(overlap))
+            raise ValueError(
+                f"extra_metadata contains reserved key(s): {overlap_s}."
+            )
+        metadata.update(extra_metadata)
     (output_dir / METADATA_FILE).write_text(json.dumps(metadata, indent=2))
 
     return output_dir
@@ -60,11 +71,14 @@ def save_activations(
 
 def load_activations(
     input_dir: Path,
-) -> tuple[list[np.ndarray], list[str], np.ndarray | None, list[list[str]], RunConfig]:
+) -> tuple[list[np.ndarray], list[str], np.ndarray | None, list[list[str]], list[str | None] | None, RunConfig]:
     tensors = load_file(str(input_dir / TRAJECTORIES_FILE))
 
     with open(input_dir / METADATA_FILE) as f:
         metadata = json.load(f)
+
+    cfg_dict = metadata["config"]
+    cfg_dict.pop("split", None)
 
     n = metadata["n_trajectories"]
     trajectories = [tensors[f"traj_{i:04d}"] for i in range(n)]
@@ -75,9 +89,10 @@ def load_activations(
         else None
     )
     token_texts = metadata["token_texts"]
-    cfg = RunConfig(**metadata["config"])
+    generated_texts = metadata.get("generated_texts")
+    cfg = RunConfig(**cfg_dict)
 
-    return trajectories, texts, labels, token_texts, cfg
+    return trajectories, texts, labels, token_texts, generated_texts, cfg
 
 
 def push_to_hub(

@@ -218,7 +218,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    trajectories, texts, labels, token_texts, cfg = load_activations(args.activations)
+    trajectories, texts, labels, token_texts, _generated, cfg = load_activations(args.activations)
     labels_arr = labels if labels is not None else np.zeros(len(trajectories), dtype=np.int64)
 
     model_key = cfg.model_key

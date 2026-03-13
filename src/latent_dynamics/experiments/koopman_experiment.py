@@ -27,7 +27,7 @@ class ExperimentConfig:
     split: str = "train"
     layer_idx: int = 5
     max_samples: int = 120
-    max_length: int = 256
+    max_input_tokens: int = 256
     use_generate: bool = False
     max_new_tokens: int = 24
     include_prompt_in_trajectory: bool = True
@@ -140,15 +140,14 @@ def _collect_pairs(
 
 def _prepare_trajectories(cfg: ExperimentConfig) -> tuple[list[np.ndarray], RunConfig]:
     if cfg.activations is not None:
-        trajectories, _, _, _, stored_cfg = load_activations(cfg.activations)
+        trajectories, _, _, _, _, stored_cfg = load_activations(cfg.activations)
         return trajectories, stored_cfg
 
     run_cfg = RunConfig(
         model_key=cfg.model_key,
         dataset_key=cfg.dataset_key,
-        split=cfg.split,
         max_samples=cfg.max_samples,
-        max_length=cfg.max_length,
+        max_input_tokens=cfg.max_input_tokens,
         layer_idx=cfg.layer_idx,
         device=resolve_device(cfg.device),
         use_generate=cfg.use_generate,
@@ -156,7 +155,7 @@ def _prepare_trajectories(cfg: ExperimentConfig) -> tuple[list[np.ndarray], RunC
         include_prompt_in_trajectory=cfg.include_prompt_in_trajectory,
     )
 
-    ds, spec = load_examples(run_cfg.dataset_key, run_cfg.split, run_cfg.max_samples)
+    ds, spec = load_examples(run_cfg.dataset_key, run_cfg.max_samples)
     texts, _labels = prepare_text_and_labels(
         ds,
         text_field=spec.text_field,
@@ -166,15 +165,11 @@ def _prepare_trajectories(cfg: ExperimentConfig) -> tuple[list[np.ndarray], RunC
     model, tokenizer = load_model_and_tokenizer(
         run_cfg.model_key, run_cfg.device or "cpu"
     )
-    trajectories, _tokens = extract_hidden_trajectories(
-        model=model,
-        tokenizer=tokenizer,
-        texts=texts,
-        layer_idx=run_cfg.layer_idx,
-        max_length=run_cfg.max_length,
-        device=run_cfg.device or "cpu",
-        cfg=run_cfg,
+    result = extract_hidden_trajectories(
+        model=model, tokenizer=tokenizer, texts=texts,
+        layer_idx=run_cfg.layer_idx, cfg=run_cfg,
     )
+    trajectories = result.per_layer[run_cfg.layer_idx]
     return trajectories, run_cfg
 
 
@@ -379,7 +374,7 @@ def _parse_args() -> ExperimentConfig:
         split=args.split,
         layer_idx=args.layer_idx,
         max_samples=args.max_samples,
-        max_length=args.max_length,
+        max_input_tokens=args.max_input_tokens,
         use_generate=args.use_generate,
         max_new_tokens=args.max_new_tokens,
         include_prompt_in_trajectory=(not args.no_include_prompt),

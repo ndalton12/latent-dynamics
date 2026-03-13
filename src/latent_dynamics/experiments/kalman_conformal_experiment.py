@@ -26,7 +26,7 @@ class ExperimentConfig:
     split: str = "train"
     layer_idx: int = 5
     max_samples: int = 120
-    max_length: int = 256
+    max_input_tokens: int = 256
     use_generate: bool = False
     max_new_tokens: int = 24
     include_prompt_in_trajectory: bool = True
@@ -62,7 +62,9 @@ def _parse_args() -> ExperimentConfig:
         ),
     )
     parser.add_argument("--activations", type=Path, default=None)
-    parser.add_argument("--model-key", choices=sorted(MODEL_REGISTRY.keys()), default="gemma3_4b")
+    parser.add_argument(
+        "--model-key", choices=sorted(MODEL_REGISTRY.keys()), default="gemma3_4b"
+    )
     parser.add_argument("--dataset-key", default="toy_contrastive")
     parser.add_argument("--split", default="train")
     parser.add_argument("--layer-idx", type=int, default=5)
@@ -92,7 +94,7 @@ def _parse_args() -> ExperimentConfig:
         split=args.split,
         layer_idx=args.layer_idx,
         max_samples=args.max_samples,
-        max_length=args.max_length,
+        max_input_tokens=args.max_input_tokens,
         use_generate=args.use_generate,
         max_new_tokens=args.max_new_tokens,
         include_prompt_in_trajectory=(not args.no_include_prompt),
@@ -115,7 +117,9 @@ def _prepare_trajectories(
     cfg: ExperimentConfig,
 ) -> tuple[list[np.ndarray], np.ndarray, RunConfig]:
     if cfg.activations is not None:
-        trajectories, _texts, labels, _tokens, run_cfg = load_activations(cfg.activations)
+        trajectories, _texts, labels, _tokens, _gen, run_cfg = load_activations(
+            cfg.activations
+        )
         if labels is None:
             raise ValueError("Activations must include labels for unsafe prediction.")
         return trajectories, labels, run_cfg
@@ -123,9 +127,8 @@ def _prepare_trajectories(
     run_cfg = RunConfig(
         model_key=cfg.model_key,
         dataset_key=cfg.dataset_key,
-        split=cfg.split,
         max_samples=cfg.max_samples,
-        max_length=cfg.max_length,
+        max_input_tokens=cfg.max_input_tokens,
         layer_idx=cfg.layer_idx,
         device=resolve_device(cfg.device),
         use_generate=cfg.use_generate,
@@ -133,7 +136,7 @@ def _prepare_trajectories(
         include_prompt_in_trajectory=cfg.include_prompt_in_trajectory,
     )
 
-    ds, spec = load_examples(run_cfg.dataset_key, run_cfg.split, run_cfg.max_samples)
+    ds, spec = load_examples(run_cfg.dataset_key, run_cfg.max_samples)
     texts, labels = prepare_text_and_labels(
         ds,
         text_field=spec.text_field,
@@ -143,16 +146,17 @@ def _prepare_trajectories(
     if labels is None:
         raise ValueError("Dataset must provide labels for unsafe prediction.")
 
-    model, tokenizer = load_model_and_tokenizer(run_cfg.model_key, run_cfg.device or "cpu")
-    trajectories, _tokens = extract_hidden_trajectories(
+    model, tokenizer = load_model_and_tokenizer(
+        run_cfg.model_key, run_cfg.device or "cpu"
+    )
+    result = extract_hidden_trajectories(
         model=model,
         tokenizer=tokenizer,
         texts=texts,
         layer_idx=run_cfg.layer_idx,
-        max_length=run_cfg.max_length,
-        device=run_cfg.device or "cpu",
         cfg=run_cfg,
     )
+    trajectories = result.per_layer[run_cfg.layer_idx]
     return trajectories, labels, run_cfg
 
 
@@ -195,14 +199,16 @@ def _split_indices(
         n_train = min(max(1, n_train), n - 2)
         n_calib = min(max(1, n_calib), n - n_train - 1)
         train_idx = perm[:n_train]
-        calib_idx = perm[n_train:n_train + n_calib]
-        heldout_idx = perm[n_train + n_calib:]
+        calib_idx = perm[n_train : n_train + n_calib]
+        heldout_idx = perm[n_train + n_calib :]
 
     return np.sort(train_idx), np.sort(calib_idx), np.sort(heldout_idx)
 
 
 def _collect_states(trajectories: list[np.ndarray], idxs: np.ndarray) -> np.ndarray:
-    return np.concatenate([trajectories[int(i)] for i in idxs], axis=0).astype(np.float32)
+    return np.concatenate([trajectories[int(i)] for i in idxs], axis=0).astype(
+        np.float32
+    )
 
 
 def _collect_pairs(
@@ -219,7 +225,9 @@ def _collect_pairs(
         x_next.append(traj[1:])
 
     if not x_prev:
-        raise ValueError("No trajectory pairs available. Need trajectories of length >= 2.")
+        raise ValueError(
+            "No trajectory pairs available. Need trajectories of length >= 2."
+        )
     return np.concatenate(x_prev, axis=0), np.concatenate(x_next, axis=0)
 
 
@@ -268,7 +276,9 @@ def _fit_kalman_model(
     state_var = np.var(x_prev, axis=0).astype(np.float32)
     R = np.diag(measurement_var_scale * (state_var + process_jitter)).astype(np.float32)
 
-    first_states = np.stack([reduced[int(i)][0] for i in fit_idxs if reduced[int(i)].shape[0] > 0], axis=0)
+    first_states = np.stack(
+        [reduced[int(i)][0] for i in fit_idxs if reduced[int(i)].shape[0] > 0], axis=0
+    )
     if len(first_states) > 1:
         P0 = np.cov(first_states, rowvar=False).astype(np.float32)
     else:
@@ -330,8 +340,7 @@ def _build_prefix_score_matrix(
     idxs: np.ndarray,
 ) -> dict[int, np.ndarray]:
     return {
-        int(i): _innovation_prefix_scores(model, trajectories[int(i)])
-        for i in idxs
+        int(i): _innovation_prefix_scores(model, trajectories[int(i)]) for i in idxs
     }
 
 
@@ -355,7 +364,9 @@ def _calibrate_prefix_thresholds(
 
     thresholds: dict[int, float] = {}
     for p in range(1, max_p + 1):
-        vals = [prefix_scores[i][p - 1] for i in safe_idxs if len(prefix_scores[i]) >= p]
+        vals = [
+            prefix_scores[i][p - 1] for i in safe_idxs if len(prefix_scores[i]) >= p
+        ]
         if len(vals) == 0:
             continue
         thresholds[p] = _conformal_quantile(np.array(vals, dtype=np.float32), alpha)
@@ -429,16 +440,14 @@ def _evaluate_prefix_detection(
         y = np.array([labels[i] for i in valid], dtype=np.int64)
         pred = np.array(
             [
-                1
-                if (first_hit[i] is not None and first_hit[i] <= p)
-                else 0
+                1 if (first_hit[i] is not None and first_hit[i] <= p) else 0
                 for i in valid
             ],
             dtype=np.int64,
         )
 
-        safe_mask = (y == 0)
-        unsafe_mask = (y == 1)
+        safe_mask = y == 0
+        unsafe_mask = y == 1
         fpr = float(pred[safe_mask].mean()) if np.any(safe_mask) else float("nan")
         tpr = float(pred[unsafe_mask].mean()) if np.any(unsafe_mask) else float("nan")
         f1 = _binary_f1(y, pred)
@@ -479,11 +488,13 @@ def _evaluate_prefix_detection(
         ),
         "median_first_detect_prefix_unsafe": (
             float(np.median(np.array(unsafe_hits, dtype=np.float32)))
-            if unsafe_hits else None
+            if unsafe_hits
+            else None
         ),
         "mean_first_detect_prefix_unsafe": (
             float(np.mean(np.array(unsafe_hits, dtype=np.float32)))
-            if unsafe_hits else None
+            if unsafe_hits
+            else None
         ),
         "final_prefix_auroc": auroc_final,
         "f1_at_max_prefix": f1_at_max_prefix,
@@ -519,7 +530,9 @@ def run_experiment(cfg: ExperimentConfig) -> dict[str, Any]:
         raise ValueError("Heldout split is empty. Adjust split fractions.")
 
     if cfg.train_on_safe_only:
-        fit_idx = np.array([i for i in train_idx if labels[int(i)] == 0], dtype=np.int64)
+        fit_idx = np.array(
+            [i for i in train_idx if labels[int(i)] == 0], dtype=np.int64
+        )
         if len(fit_idx) < 2:
             raise ValueError(
                 "Need at least 2 safe training trajectories to fit safe-only dynamics."

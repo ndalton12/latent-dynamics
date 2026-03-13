@@ -29,13 +29,13 @@ from latent_dynamics.experiments.kalman_conformal_experiment import (
 from latent_dynamics.experiments.kalman_conformal_experiment import (
     run_experiment as run_kalman,
 )
-from latent_dynamics.hub import activation_subpath, load_activations, save_activations
-from latent_dynamics.judge import JudgeCache, SafetyJudge, judge_texts
-from latent_dynamics.models import load_model_and_tokenizer, resolve_device
-from latent_dynamics.trajectory_features import (
+from latent_dynamics.experiments.trajectory_features import (
     signature_prefix_score_map,
     turning_angle_score_map,
 )
+from latent_dynamics.hub import activation_subpath, load_activations, save_activations
+from latent_dynamics.judge import JudgeCache, SafetyJudge, judge_texts
+from latent_dynamics.models import load_model_and_tokenizer, resolve_device
 
 
 @dataclass
@@ -46,7 +46,7 @@ class BenchmarkConfig:
     split: str = "train"
     layers: list[int] | None = None
     max_samples: int = 160
-    max_length: int = 256
+    max_input_tokens: int = 256
     use_generate: bool = False
     max_new_tokens: int = 24
     include_prompt_in_trajectory: bool = True
@@ -135,7 +135,7 @@ def _parse_args() -> BenchmarkConfig:
         split=args.split,
         layers=list(args.layers),
         max_samples=args.max_samples,
-        max_length=args.max_length,
+        max_input_tokens=args.max_input_tokens,
         use_generate=args.use_generate,
         max_new_tokens=args.max_new_tokens,
         include_prompt_in_trajectory=(not args.no_include_prompt),
@@ -587,7 +587,7 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
     if cfg.activations_root is not None:
         paths = {
             li: cfg.activations_root
-            / activation_subpath(cfg.dataset_key, cfg.split, cfg.model_key, li)
+            / activation_subpath(cfg.dataset_key, cfg.model_key, li)
             for li in layers
         }
         missing = [str(p) for p in paths.values() if not p.exists()]
@@ -602,9 +602,8 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
     run_cfg = RunConfig(
         model_key=cfg.model_key,
         dataset_key=cfg.dataset_key,
-        split=cfg.split,
         max_samples=cfg.max_samples,
-        max_length=cfg.max_length,
+        max_input_tokens=cfg.max_input_tokens,
         layer_idx=layers[0],
         device=resolve_device(cfg.device),
         use_generate=cfg.use_generate,
@@ -613,8 +612,7 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
     )
     ds, spec = load_examples(
         run_cfg.dataset_key,
-        run_cfg.split,
-        run_cfg.max_samples,
+        max_samples=run_cfg.max_samples,
         stratify_labels=True,
     )
     texts, labels = prepare_text_and_labels(
@@ -638,7 +636,11 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
                 "Example: --judge-model gpt-4o-mini"
             )
         run_cfg = RunConfig(
-            **{**run_cfg.__dict__, "use_generate": True, "max_new_tokens": cfg.judge_max_new_tokens}
+            **{
+                **run_cfg.__dict__,
+                "use_generate": True,
+                "max_new_tokens": cfg.judge_max_new_tokens,
+            }
         )
     elif cfg.judge_model is not None:
         print(
@@ -651,23 +653,20 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
         run_cfg.model_key, run_cfg.device or "cpu"
     )
 
-    per_layer, token_texts = extract_multi_layer_trajectories(
+    result = extract_multi_layer_trajectories(
         model=model,
         tokenizer=tokenizer,
         texts=texts,
         layer_indices=layers,
-        max_length=run_cfg.max_length,
-        device=run_cfg.device or "cpu",
         cfg=run_cfg,
     )
+    per_layer = result.per_layer
+    token_texts = result.token_texts
 
     if use_judge:
-        # token_texts[i] holds the generated tokens (prompt excluded because
-        # include_prompt_in_trajectory=False). Decode them as the completion and
-        # judge against the original prompt — no second generation needed.
-        completions = [
-            tokenizer.convert_tokens_to_string(toks) for toks in token_texts
-        ]
+        # result.generated_texts holds decoded completions (prompt excluded when
+        # include_prompt_in_trajectory=False). Judge against the original prompt.
+        completions = [g or "" for g in result.generated_texts]
         labels = _judge_completions(texts, completions, cfg)
         print(
             f"Judge labels: {int(labels.sum())} unsafe / "
@@ -676,9 +675,17 @@ def _ensure_layer_paths(cfg: BenchmarkConfig) -> dict[int, Path]:
 
     paths: dict[int, Path] = {}
     for li in layers:
-        p = out_root / activation_subpath(cfg.dataset_key, cfg.split, cfg.model_key, li)
+        p = out_root / activation_subpath(cfg.dataset_key, cfg.model_key, li)
         cfg_li = RunConfig(**{**run_cfg.__dict__, "layer_idx": li})
-        save_activations(p, per_layer[li], texts, labels, token_texts, cfg_li)
+        save_activations(
+            p,
+            per_layer[li],
+            result.input_prompts,
+            labels,
+            token_texts,
+            cfg_li,
+            generated_texts=result.generated_texts,
+        )
         paths[li] = p
     return paths
 
@@ -790,8 +797,8 @@ def run_benchmark(cfg: BenchmarkConfig) -> dict[str, Any]:
 
     runs: list[dict[str, Any]] = []
     for li in layers:
-        trajectories, _texts, labels, _tokens, source_cfg = load_activations(
-            layer_paths[li]
+        trajectories, _texts, labels, _tokens, _generated, source_cfg = (
+            load_activations(layer_paths[li])
         )
         if labels is None or len(np.unique(labels)) < 2:
             if labels is None:
@@ -803,12 +810,9 @@ def run_benchmark(cfg: BenchmarkConfig) -> dict[str, Any]:
                 f"{int(u)}:{int(c)}" for u, c in zip(uniq.tolist(), cnt.tolist())
             )
             hint = ""
-            if (
-                source_cfg.dataset_key == "wildjailbreak"
-                and source_cfg.split == "train"
-            ):
+            if source_cfg.dataset_key == "wildjailbreak":
                 hint = (
-                    " wildjailbreak/train is typically one-class; try `--split eval`."
+                    " wildjailbreak train is typically one-class; try `--split eval`."
                 )
             raise ValueError(
                 f"Layer {li} has single-class labels ({counts_str}); cannot benchmark "
