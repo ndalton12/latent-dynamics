@@ -186,7 +186,10 @@ def extract(
     extracted_layers = sorted(result.per_layer.keys())
     typer.echo(f"Extracted {len(texts)} trajectories x {len(extracted_layers)} layers.")
 
-    extra_metadata: dict[str, object] | None = None
+    extra_metadata: dict[str, object] = {}
+    if metadata is not None:
+        extra_metadata["example_metadata"] = metadata
+
     if judge_generations:
         typer.echo(
             f"Judging {len(texts)} generations with {DEFAULT_GENERATION_JUDGE_MODEL}..."
@@ -213,12 +216,10 @@ def extract(
             f"Judge summary: unsafe={n_unsafe} safe={len(judge_results) - n_unsafe} "
             f"compliance={n_compliance} refusal={len(judge_results) - n_compliance}"
         )
-        extra_metadata = {
-            "judge_model": DEFAULT_GENERATION_JUDGE_MODEL,
-            "judge_unsafe_labels": unsafe_labels,
-            "judge_compliance_labels": compliance_labels,
-            "judge_confidences": confidences,
-        }
+        extra_metadata["judge_model"] = DEFAULT_GENERATION_JUDGE_MODEL
+        extra_metadata["judge_unsafe_labels"] = unsafe_labels
+        extra_metadata["judge_compliance_labels"] = compliance_labels
+        extra_metadata["judge_confidences"] = confidences
 
     for li in extracted_layers:
         sub = activation_subpath(cfg.dataset_key, cfg.model_key, li)
@@ -232,7 +233,7 @@ def extract(
             result.token_texts,
             layer_cfg,
             generated_texts=result.generated_texts,
-            extra_metadata=extra_metadata,
+            extra_metadata=(extra_metadata if extra_metadata else None),
         )
         typer.echo(f"  Saved layer {li} -> {layer_dir}")
 
