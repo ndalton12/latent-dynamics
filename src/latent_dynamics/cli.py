@@ -112,6 +112,16 @@ def extract(
             is_flag=True,
         ),
     ] = False,
+    inference_batch_size: Annotated[
+        int,
+        typer.Option(
+            "--inference-batch-size",
+            help=(
+                "Batch size for true batch inference "
+                "(used with --use-true-batch-inference)."
+            ),
+        ),
+    ] = 16,
 ) -> None:
     """Extract hidden-state trajectories from a model and dataset, save to disk.
 
@@ -141,8 +151,8 @@ def extract(
             "--judge-generations requires --use-generate so completions exist."
         )
 
-    if use_true_batch_inference and use_generate:
-        typer.echo("Using batch inference!")
+    if inference_batch_size < 1:
+        raise typer.BadParameter("--inference-batch-size must be >= 1.")
 
     layer_indices: list[int] | None = None
     if all_layers:
@@ -163,12 +173,17 @@ def extract(
         max_new_tokens=max_new_tokens,
         include_prompt_in_trajectory=include_prompt,
         use_true_batch_inference=use_true_batch_inference,
+        inference_batch_size=inference_batch_size,
     )
 
     typer.echo(f"Device: {cfg.device}")
     typer.echo(f"Model:  {cfg.model_key}")
     typer.echo(f"Dataset: {cfg.dataset_key} (max_samples={cfg.max_samples})")
     typer.echo(f"Layers:  {'all' if layer_indices is None else layer_indices}")
+    typer.echo(
+        f"True batch inference: {cfg.use_true_batch_inference} "
+        f"(batch_size={cfg.inference_batch_size})"
+    )
 
     ds, spec = load_examples(cfg.dataset_key, cfg.max_samples, stratify_labels=True)
     texts, labels, metadata = prepare_text_and_labels(ds, spec, return_metadata=True)

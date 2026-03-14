@@ -123,38 +123,45 @@ def _decode_generated(
     return tokenizer.decode(gen_ids.cpu(), skip_special_tokens=True)
 
 
-def extract_multi_layer_trajectories(
+def _resolve_layer_indices(
+    model: AutoModelForCausalLM,
+    layer_indices: list[int] | None,
+) -> list[int]:
+    if layer_indices is not None:
+        return layer_indices
+
+    text_cfg = (
+        model.config.get_text_config()
+        if hasattr(model.config, "get_text_config")
+        else model.config
+    )
+    n_layers = text_cfg.num_hidden_layers
+    return list(range(n_layers + 1))
+
+
+def _extract_multi_layer_true_batch(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     texts: list[str],
-    layer_indices: list[int] | None,
+    layer_indices: list[int],
     cfg: RunConfig,
+    device: str,
 ) -> ExtractionResult:
-    """Collect trajectories for requested layers, with optional true batched inference.
-
-    Args:
-        layer_indices: Specific layer indices to extract. Pass ``None`` to
-            extract all layers (embedding + every transformer layer).
-    """
-    device = resolve_device(cfg.device)
     max_length = cfg.max_input_tokens
-
-    if layer_indices is None:
-        text_cfg = (
-            model.config.get_text_config()
-            if hasattr(model.config, "get_text_config")
-            else model.config
+    if cfg.inference_batch_size < 1:
+        raise ValueError(
+            f"inference_batch_size must be >= 1. Got {cfg.inference_batch_size}."
         )
-        n_layers = text_cfg.num_hidden_layers
-        layer_indices = list(range(n_layers + 1))
+    batch_size = int(cfg.inference_batch_size)
 
     per_layer: dict[int, list[np.ndarray]] = {li: [] for li in layer_indices}
     token_texts: list[list[str]] = []
     generated_texts: list[str | None] = []
 
-    if cfg.use_true_batch_inference and texts:
+    for start in range(0, len(texts), batch_size):
+        batch_texts = texts[start : start + batch_size]
         inputs = tokenizer(
-            texts,
+            batch_texts,
             return_tensors="pt",
             truncation=True,
             max_length=max_length,
@@ -179,7 +186,7 @@ def extract_multi_layer_trajectories(
                     output_hidden_states=True,
                 )
                 prompt_len = int(input_ids.shape[1])
-                for i in range(len(texts)):
+                for i in range(len(batch_texts)):
                     ids, positions = _extract_ids_and_positions_generate(
                         seq_row=seq_ids[i],
                         prompt_mask_row=attention_mask[i].bool(),
@@ -209,7 +216,7 @@ def extract_multi_layer_trajectories(
                     attention_mask=attention_mask,
                     output_hidden_states=True,
                 )
-                for i in range(len(texts)):
+                for i in range(len(batch_texts)):
                     positions = torch.nonzero(
                         attention_mask[i].bool(), as_tuple=False
                     ).squeeze(-1)
@@ -222,12 +229,27 @@ def extract_multi_layer_trajectories(
                         hs_row = out.hidden_states[li][i]
                         hs = hs_row.index_select(0, positions).float().cpu().numpy()
                         per_layer[li].append(hs)
-        return ExtractionResult(
-            per_layer=per_layer,
-            token_texts=token_texts,
-            input_prompts=list(texts),
-            generated_texts=generated_texts,
-        )
+
+    return ExtractionResult(
+        per_layer=per_layer,
+        token_texts=token_texts,
+        input_prompts=list(texts),
+        generated_texts=generated_texts,
+    )
+
+
+def _extract_multi_layer_single(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    texts: list[str],
+    layer_indices: list[int],
+    cfg: RunConfig,
+    device: str,
+) -> ExtractionResult:
+    max_length = cfg.max_input_tokens
+    per_layer: dict[int, list[np.ndarray]] = {li: [] for li in layer_indices}
+    token_texts: list[list[str]] = []
+    generated_texts: list[str | None] = []
 
     for text in tqdm(texts):
         inputs = tokenizer(
@@ -288,6 +310,42 @@ def extract_multi_layer_trajectories(
         token_texts=token_texts,
         input_prompts=list(texts),
         generated_texts=generated_texts,
+    )
+
+
+def extract_multi_layer_trajectories(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    texts: list[str],
+    layer_indices: list[int] | None,
+    cfg: RunConfig,
+) -> ExtractionResult:
+    """Collect trajectories for requested layers, with optional true batched inference.
+
+    Args:
+        layer_indices: Specific layer indices to extract. Pass ``None`` to
+            extract all layers (embedding + every transformer layer).
+    """
+    device = resolve_device(cfg.device)
+    resolved_layers = _resolve_layer_indices(model, layer_indices)
+
+    if cfg.use_true_batch_inference and texts:
+        return _extract_multi_layer_true_batch(
+            model=model,
+            tokenizer=tokenizer,
+            texts=texts,
+            layer_indices=resolved_layers,
+            cfg=cfg,
+            device=device,
+        )
+
+    return _extract_multi_layer_single(
+        model=model,
+        tokenizer=tokenizer,
+        texts=texts,
+        layer_indices=resolved_layers,
+        cfg=cfg,
+        device=device,
     )
 
 

@@ -25,6 +25,7 @@ class RunConfig:
     top_p: float = 0.95
     include_prompt_in_trajectory: bool = True
     use_true_batch_inference: bool = False
+    inference_batch_size: int = 16
 
 
 MODEL_REGISTRY: dict[str, dict[str, Any]] = {
