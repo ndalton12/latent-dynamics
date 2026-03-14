@@ -158,7 +158,7 @@ def _extract_multi_layer_true_batch(
     token_texts: list[list[str]] = []
     generated_texts: list[str | None] = []
 
-    for start in range(0, len(texts), batch_size):
+    for start in tqdm(range(0, len(texts), batch_size)):
         batch_texts = texts[start : start + batch_size]
         inputs = tokenizer(
             batch_texts,
