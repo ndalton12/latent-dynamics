@@ -146,6 +146,7 @@ def _extract_multi_layer_true_batch(
     layer_indices: list[int],
     cfg: RunConfig,
     device: str,
+    show_progress: bool,
 ) -> ExtractionResult:
     max_length = cfg.max_input_tokens
     if cfg.inference_batch_size < 1:
@@ -158,7 +159,7 @@ def _extract_multi_layer_true_batch(
     token_texts: list[list[str]] = []
     generated_texts: list[str | None] = []
 
-    for start in tqdm(range(0, len(texts), batch_size)):
+    for start in tqdm(range(0, len(texts), batch_size), disable=not show_progress):
         batch_texts = texts[start : start + batch_size]
         inputs = tokenizer(
             batch_texts,
@@ -245,13 +246,14 @@ def _extract_multi_layer_single(
     layer_indices: list[int],
     cfg: RunConfig,
     device: str,
+    show_progress: bool,
 ) -> ExtractionResult:
     max_length = cfg.max_input_tokens
     per_layer: dict[int, list[np.ndarray]] = {li: [] for li in layer_indices}
     token_texts: list[list[str]] = []
     generated_texts: list[str | None] = []
 
-    for text in tqdm(texts):
+    for text in tqdm(texts, disable=not show_progress):
         inputs = tokenizer(
             text,
             return_tensors="pt",
@@ -319,6 +321,7 @@ def extract_multi_layer_trajectories(
     texts: list[str],
     layer_indices: list[int] | None,
     cfg: RunConfig,
+    show_progress: bool = True,
 ) -> ExtractionResult:
     """Collect trajectories for requested layers, with optional true batched inference.
 
@@ -337,6 +340,7 @@ def extract_multi_layer_trajectories(
             layer_indices=resolved_layers,
             cfg=cfg,
             device=device,
+            show_progress=show_progress,
         )
 
     return _extract_multi_layer_single(
@@ -346,6 +350,7 @@ def extract_multi_layer_trajectories(
         layer_indices=resolved_layers,
         cfg=cfg,
         device=device,
+        show_progress=show_progress,
     )
 
 

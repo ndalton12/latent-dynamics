@@ -153,6 +153,7 @@ def extract(
         list_trajectory_shards,
         write_trajectory_shard_manifest,
     )
+    from tqdm.auto import tqdm
 
     if judge_generations and not use_generate:
         raise typer.BadParameter(
@@ -217,6 +218,7 @@ def extract(
         [],
         layer_indices=layer_indices,
         cfg=cfg,
+        show_progress=False,
     )
     extracted_layers = sorted(empty_result.per_layer.keys())
 
@@ -252,7 +254,7 @@ def extract(
     judge_confidences: list[float] = []
     if judge_generations:
         typer.echo(
-            f"Judging {len(texts)} generations with {DEFAULT_GENERATION_JUDGE_MODEL}..."
+            f"Initializing judge ({DEFAULT_GENERATION_JUDGE_MODEL})..."
         )
         judge = SafetyJudge(
             model=DEFAULT_GENERATION_JUDGE_MODEL,
@@ -263,7 +265,9 @@ def extract(
         )
 
     chunk_size = max(1, int(cfg.inference_batch_size))
-    for start in range(0, len(texts), chunk_size):
+    chunk_starts = range(0, len(texts), chunk_size)
+    chunk_iter = tqdm(chunk_starts, desc="extract chunks", disable=len(texts) == 0)
+    for start in chunk_iter:
         chunk_texts = texts[start : start + chunk_size]
         chunk_result = extract_multi_layer_trajectories(
             mdl,
@@ -271,6 +275,7 @@ def extract(
             chunk_texts,
             layer_indices=layer_indices,
             cfg=cfg,
+            show_progress=False,
         )
         all_token_texts.extend(chunk_result.token_texts)
         all_generated_texts.extend(chunk_result.generated_texts)
