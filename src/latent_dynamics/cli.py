@@ -137,14 +137,22 @@ def extract(
     from latent_dynamics.config import RunConfig
     from latent_dynamics.data import load_examples, prepare_text_and_labels
     from latent_dynamics.hub import (
+        METADATA_FILE,
+        TRAJECTORIES_FILE,
         activation_subpath,
-        save_activations,
+        save_activations_shard,
+        write_activation_metadata,
     )
     from latent_dynamics.hub import (
         push_to_hub as _push,
     )
     from latent_dynamics.judge import SafetyJudge, judge_prompt_generations
     from latent_dynamics.models import load_model_and_tokenizer, resolve_device
+    from latent_dynamics.utils import (
+        TRAJECTORY_SHARD_MANIFEST_FILE,
+        list_trajectory_shards,
+        write_trajectory_shard_manifest,
+    )
 
     if judge_generations and not use_generate:
         raise typer.BadParameter(
@@ -203,20 +211,45 @@ def extract(
         f"Extracting trajectories for layers "
         f"{'all' if layer_indices is None else layer_indices} ..."
     )
-    result = extract_multi_layer_trajectories(
+    empty_result = extract_multi_layer_trajectories(
         mdl,
         tokenizer,
-        texts,
+        [],
         layer_indices=layer_indices,
         cfg=cfg,
     )
-    extracted_layers = sorted(result.per_layer.keys())
-    typer.echo(f"Extracted {len(texts)} trajectories x {len(extracted_layers)} layers.")
+    extracted_layers = sorted(empty_result.per_layer.keys())
 
-    extra_metadata: dict[str, object] = {}
-    if metadata is not None:
-        extra_metadata["example_metadata"] = metadata
+    layer_dirs = {
+        li: output / activation_subpath(cfg.dataset_key, cfg.model_key, li)
+        for li in extracted_layers
+    }
+    for layer_dir in layer_dirs.values():
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        single_path = layer_dir / TRAJECTORIES_FILE
+        if single_path.exists():
+            single_path.unlink()
+        metadata_path = layer_dir / METADATA_FILE
+        if metadata_path.exists():
+            metadata_path.unlink()
+        manifest_path = layer_dir / TRAJECTORY_SHARD_MANIFEST_FILE
+        if manifest_path.exists():
+            manifest_path.unlink()
+        for shard_path in list_trajectory_shards(layer_dir):
+            shard_path.unlink()
 
+    all_token_texts: list[list[str]] = []
+    all_generated_texts: list[str | None] = []
+    next_idx_by_layer: dict[int, int] = {li: 0 for li in extracted_layers}
+    shard_idx_by_layer: dict[int, int] = {li: 0 for li in extracted_layers}
+    shard_manifest_entries_by_layer: dict[int, list[dict[str, object]]] = {
+        li: [] for li in extracted_layers
+    }
+
+    judge: SafetyJudge | None = None
+    judge_unsafe_labels: list[int] = []
+    judge_compliance_labels: list[int] = []
+    judge_confidences: list[float] = []
     if judge_generations:
         typer.echo(
             f"Judging {len(texts)} generations with {DEFAULT_GENERATION_JUDGE_MODEL}..."
@@ -228,41 +261,80 @@ def extract(
             requests_per_minute=120,
             show_progress=True,
         )
-        judge_results = judge_prompt_generations(
-            prompts=texts,
-            generations=result.generated_texts,
-            judge=judge,
-            cache=None,
+
+    chunk_size = max(1, int(cfg.inference_batch_size))
+    for start in range(0, len(texts), chunk_size):
+        chunk_texts = texts[start : start + chunk_size]
+        chunk_result = extract_multi_layer_trajectories(
+            mdl,
+            tokenizer,
+            chunk_texts,
+            layer_indices=layer_indices,
+            cfg=cfg,
         )
-        unsafe_labels = [int(r.unsafe) for r in judge_results]
-        compliance_labels = [int(r.compliance) for r in judge_results]
-        confidences = [float(r.confidence) for r in judge_results]
-        n_unsafe = sum(unsafe_labels)
-        n_compliance = sum(compliance_labels)
+        all_token_texts.extend(chunk_result.token_texts)
+        all_generated_texts.extend(chunk_result.generated_texts)
+
+        if judge is not None:
+            chunk_judge_results = judge_prompt_generations(
+                prompts=chunk_texts,
+                generations=chunk_result.generated_texts,
+                judge=judge,
+                cache=None,
+            )
+            judge_unsafe_labels.extend(int(r.unsafe) for r in chunk_judge_results)
+            judge_compliance_labels.extend(
+                int(r.compliance) for r in chunk_judge_results
+            )
+            judge_confidences.extend(float(r.confidence) for r in chunk_judge_results)
+
+        for li in extracted_layers:
+            start_idx = next_idx_by_layer[li]
+            next_idx, _ = save_activations_shard(
+                output_dir=layer_dirs[li],
+                trajectories=chunk_result.per_layer[li],
+                start_idx=start_idx,
+                shard_idx=shard_idx_by_layer[li],
+                manifest_entries=shard_manifest_entries_by_layer[li],
+            )
+            next_idx_by_layer[li] = next_idx
+            shard_idx_by_layer[li] += 1
+
+    typer.echo(f"Extracted {len(texts)} trajectories x {len(extracted_layers)} layers.")
+
+    extra_metadata: dict[str, object] = {}
+    if metadata is not None:
+        extra_metadata["example_metadata"] = metadata
+
+    if judge is not None:
+        n_unsafe = sum(judge_unsafe_labels)
+        n_compliance = sum(judge_compliance_labels)
         typer.echo(
-            f"Judge summary: unsafe={n_unsafe} safe={len(judge_results) - n_unsafe} "
-            f"compliance={n_compliance} refusal={len(judge_results) - n_compliance}"
+            f"Judge summary: unsafe={n_unsafe} safe={len(judge_unsafe_labels) - n_unsafe} "
+            f"compliance={n_compliance} refusal={len(judge_compliance_labels) - n_compliance}"
         )
         extra_metadata["judge_model"] = DEFAULT_GENERATION_JUDGE_MODEL
-        extra_metadata["judge_unsafe_labels"] = unsafe_labels
-        extra_metadata["judge_compliance_labels"] = compliance_labels
-        extra_metadata["judge_confidences"] = confidences
+        extra_metadata["judge_unsafe_labels"] = judge_unsafe_labels
+        extra_metadata["judge_compliance_labels"] = judge_compliance_labels
+        extra_metadata["judge_confidences"] = judge_confidences
 
     for li in extracted_layers:
-        sub = activation_subpath(cfg.dataset_key, cfg.model_key, li)
-        layer_dir = output / sub
         layer_cfg = RunConfig(**{**cfg.__dict__, "layer_idx": li})
-        save_activations(
-            layer_dir,
-            result.per_layer[li],
-            texts,
-            labels,
-            result.token_texts,
-            layer_cfg,
-            generated_texts=result.generated_texts,
+        write_trajectory_shard_manifest(
+            output_dir=layer_dirs[li],
+            entries=shard_manifest_entries_by_layer[li],
+        )
+        write_activation_metadata(
+            output_dir=layer_dirs[li],
+            trajectories_count=next_idx_by_layer[li],
+            texts=texts,
+            labels=labels,
+            token_texts=all_token_texts,
+            cfg=layer_cfg,
+            generated_texts=all_generated_texts,
             extra_metadata=(extra_metadata if extra_metadata else None),
         )
-        typer.echo(f"  Saved layer {li} -> {layer_dir}")
+        typer.echo(f"  Saved layer {li} -> {layer_dirs[li]}")
 
     if push_to_hub:
         url = _push(output, push_to_hub)

@@ -198,7 +198,8 @@ def _find_activation_leaves(root_or_leaf: Path) -> list[Path]:
 
     if not leaves:
         raise FileNotFoundError(
-            f"No activation leaves found under {root} (expected metadata.json + trajectories.safetensors)."
+            f"No activation leaves found under {root} "
+            "(expected metadata.json + trajectories.safetensors or shard files)."
         )
     return leaves
 
