@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -411,3 +412,85 @@ def pull_from_hub(
             local_dir=str(local_dir),
         )
     return local_dir
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Push/pull activation artifacts to/from a Hugging Face dataset repo.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    push_parser = subparsers.add_parser(
+        "push",
+        help="Upload a local folder to a Hugging Face dataset repo.",
+    )
+    push_parser.add_argument(
+        "local_dir",
+        type=Path,
+        help="Local folder to upload.",
+    )
+    push_parser.add_argument(
+        "repo_id",
+        type=str,
+        help="Hub dataset repo id (e.g. user/repo).",
+    )
+    push_parser.add_argument(
+        "--path-in-repo",
+        type=str,
+        default=None,
+        help="Optional subpath within the dataset repo.",
+    )
+
+    pull_parser = subparsers.add_parser(
+        "pull",
+        help="Download files from a Hugging Face dataset repo.",
+    )
+    pull_parser.add_argument(
+        "repo_id",
+        type=str,
+        help="Hub dataset repo id (e.g. user/repo).",
+    )
+    pull_parser.add_argument(
+        "local_dir",
+        type=Path,
+        help="Destination directory for downloaded files.",
+    )
+    pull_parser.add_argument(
+        "--path-in-repo",
+        type=str,
+        default=None,
+        help="Optional subpath within the dataset repo to download.",
+    )
+
+    return parser
+
+
+def main() -> None:
+    args = _build_arg_parser().parse_args()
+    if args.command == "push":
+        local_dir = args.local_dir.expanduser().resolve()
+        if not local_dir.exists():
+            raise FileNotFoundError(f"Local directory does not exist: {local_dir}")
+        url = push_to_hub(
+            local_dir=local_dir,
+            repo_id=args.repo_id,
+            path_in_repo=args.path_in_repo,
+        )
+        print(f"Pushed '{local_dir}' to {url}")
+        return
+
+    if args.command == "pull":
+        local_dir = args.local_dir.expanduser().resolve()
+        out_dir = pull_from_hub(
+            repo_id=args.repo_id,
+            local_dir=local_dir,
+            path_in_repo=args.path_in_repo,
+        )
+        print(f"Pulled '{args.repo_id}' into '{out_dir}'")
+        return
+
+    raise ValueError(f"Unsupported command: {args.command}")
+
+
+if __name__ == "__main__":
+    main()
