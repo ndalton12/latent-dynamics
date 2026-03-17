@@ -166,8 +166,8 @@ def plot_layerwise_pca(
                     return "<br>".join(textwrap.wrap(html.escape(text), width=80))
 
                 text = [
-                    f"ID: {sample['id']}<br>Token: '{token}'<br><extra>{process_text(sample['text'])}</extra>"
-                    for token in tokens_pooled
+                    f"ID: {sample['id']}<br>Token position: {i + 1}/{len(tokens_pooled)}<br>Token: '{token}'<br><extra>{process_text(sample['text'])}</extra>"
+                    for i, token in enumerate(tokens_pooled)
                 ]
 
                 color = "green" if sample["is_safe"] else "red"
@@ -181,7 +181,7 @@ def plot_layerwise_pca(
                         marker=dict(color=color, symbol=symbol, size=4),
                         line=dict(color=color, width=1.0),
                         opacity=alpha,
-                        hovertemplate="PC1: %{x:.2f}<br>PC2: %{y:.2f}<br>%{text}",
+                        hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{text}",
                         text=text,
                         showlegend=False,
                     ),
