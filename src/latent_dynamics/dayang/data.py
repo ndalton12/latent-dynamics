@@ -66,31 +66,6 @@ SORRY_BENCH_CATEGORY_DESCRIPTIONS = [
 
 
 DATASET_REGISTRY: dict[str, DatasetSpec] = {
-    "sorry_bench": DatasetSpec(
-        path="sorry-bench/sorry-bench-202503",
-        split="train",
-        filter_fn=lambda sample: sample["turns"][0] is not None,  # filter out samples with null prompts
-        map_fn=lambda sample, i: {
-            "id": f"sorry_bench/{sample['question_id']}",
-            "prompt": sample["turns"][0],
-            "is_safe": False,
-            "is_adversarial": False,
-            "prompt_category": SORRY_BENCH_CATEGORY_DESCRIPTIONS[int(sample["category"]) - 1],
-            "prompt_style": sample["prompt_style"],
-        },
-    ),
-    "xstest": DatasetSpec(
-        path="Paul/XSTest",
-        split="train",
-        map_fn=lambda sample, i: {
-            "id": f"xstest/{sample['id']}",
-            "prompt": sample["prompt"],
-            "is_safe": sample["label"] == "safe",
-            "is_adversarial": False,
-            "prompt_type": sample["type"],
-            "prompt_focus": sample["focus"],
-        },
-    ),
     "wildjailbreak/train/vanilla": DatasetSpec(
         path="allenai/wildjailbreak",
         name="train",
@@ -165,6 +140,31 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
             "id": f"beavertails30k/test/{i}",
             **sample,
             "is_adversarial": False,
+        },
+    ),
+    "sorry_bench": DatasetSpec(
+        path="sorry-bench/sorry-bench-202503",
+        split="train",
+        filter_fn=lambda sample: sample["turns"][0] is not None,  # filter out samples with null prompts
+        map_fn=lambda sample, i: {
+            "id": f"sorry_bench/{sample['question_id']}",
+            "prompt": sample["turns"][0],
+            "is_safe": False,
+            "is_adversarial": False,
+            "prompt_category": SORRY_BENCH_CATEGORY_DESCRIPTIONS[int(sample["category"]) - 1],
+            "prompt_style": sample["prompt_style"],
+        },
+    ),
+    "xstest": DatasetSpec(
+        path="Paul/XSTest",
+        split="train",
+        map_fn=lambda sample, i: {
+            "id": f"xstest/{sample['id']}",
+            "prompt": sample["prompt"],
+            "is_safe": sample["label"] == "safe",
+            "is_adversarial": False,
+            "prompt_type": sample["type"],
+            "prompt_focus": sample["focus"],
         },
     ),
 }
