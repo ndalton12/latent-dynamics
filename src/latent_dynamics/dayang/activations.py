@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 def _prepare_sample(
     sample,
     tokenizer: AutoTokenizer,
-    include_response: bool | str,
+    include_response: bool | str = False,
     apply_chat_template: bool = False,
 ) -> dict[str, str]:
     # Create conversation messages
@@ -47,7 +47,7 @@ def _prepare_dataset(
             "include_response": include_response,
             "apply_chat_template": apply_chat_template,
         },
-        remove_columns=["prompt"] + (["response"] if include_response else []),
+        remove_columns=["prompt"] + (["response"] if include_response is True else []),
         desc="Preparing dataset",
     )
     return dataset
