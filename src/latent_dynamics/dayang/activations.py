@@ -1,12 +1,125 @@
 from __future__ import annotations
 
-from typing import Any
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 import torch
 from datasets import Dataset
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+PoolMethod = Literal["all", "first", "mid", "last", "mean"] | slice
+
+
+def _pool(
+    activations: np.ndarray,
+    tokens: list[str],
+    pool_method: PoolMethod,
+    include_bos: bool,
+) -> tuple[np.ndarray, list[str]]:
+    if not include_bos:
+        activations = activations[1:]
+        tokens = tokens[1:]
+
+    if isinstance(pool_method, slice):
+        activations_pooled, tokens_pooled = activations[pool_method], tokens[pool_method]
+    elif pool_method == "first":
+        activations_pooled, tokens_pooled = activations[:1], tokens[:1]
+    elif pool_method == "mid":
+        mid_idx = len(activations) // 2
+        activations_pooled, tokens_pooled = activations[mid_idx : mid_idx + 1], tokens[mid_idx : mid_idx + 1]
+    elif pool_method == "last":
+        activations_pooled, tokens_pooled = activations[-1:], tokens[-1:]
+    elif pool_method == "mean":
+        activations_pooled, tokens_pooled = activations.mean(axis=0, keepdims=True), ["mean"]
+    elif pool_method == "all":
+        activations_pooled, tokens_pooled = activations, tokens
+    else:
+        raise ValueError(f"Unknown pool_method: '{pool_method}'")
+
+    return activations_pooled, tokens_pooled
+
+
+@dataclass
+class Activations:
+    metadata: dict[Any, dict[str, Any]]
+    activations: dict[int, dict[Any, np.ndarray]]
+
+    @property
+    def num_samples(self) -> int:
+        return len(self.metadata)
+
+    @property
+    def num_layers(self) -> int:
+        return len(self.activations)
+
+    @property
+    def layers(self) -> list[int]:
+        return sorted(list(self.activations.keys()))
+
+    def save(self, path: str | Path):
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        with open(path / "metadata.json", "w") as f:
+            json.dump(self.metadata, f, indent=2)
+        for layer_idx, acts in self.activations.items():
+            np.savez_compressed(path / f"layer_{layer_idx}.npz", **{str(k): v for k, v in acts.items()})
+
+    @classmethod
+    def load(cls, path: str | Path) -> "Activations":
+        path = Path(path)
+        with open(path / "metadata.json", "r") as f:
+            metadata = json.load(f)
+
+        activations = {}
+        for file in path.glob("layer_*.npz"):
+            layer_idx = int(file.stem.split("_")[1])
+            npz_file = np.load(file)
+            activations[layer_idx] = npz_file
+
+        return cls(metadata=metadata, activations=activations)
+
+    def get(
+        self,
+        sample_id: str = None,
+        layer_idx: int | None = None,
+        pool_method: str | slice = "all",
+        include_bos: bool = False,
+    ) -> Any:
+        """
+        If `sample_id` and `layer_idx` are provided, returns a pooled dictionary for that sample.
+        If only `layer_idx` is provided, returns a list of pooled dictionaries for all samples in that layer.
+        """
+        if sample_id is not None and layer_idx is not None:
+            metadata = self.metadata[sample_id]
+            activations = self.activations[layer_idx][sample_id]
+            activations_pooled, tokens_pooled = _pool(activations, metadata["tokens"], pool_method, include_bos)
+            return {
+                **metadata,
+                "activations": activations_pooled,
+                "tokens": tokens_pooled,
+            }
+
+        elif layer_idx is not None:
+            results = []
+            for sample_id in self.metadata.keys():
+                results.append(
+                    self.get(sample_id=sample_id, layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+                )
+            return results
+        else:
+            raise ValueError("Must provide at least layer_idx")
+
+    def select(self, sample_ids: list[str]) -> "Activations":
+        """Return a new Activations object containing only the specified samples.
+
+        This method only creates a subset of the metadata, while the activations dictionary is kept as a reference
+        to save memory."""
+        metadata_new = {sample_id: value for sample_id, value in self.metadata.items() if sample_id in sample_ids}
+        return Activations(metadata=metadata_new, activations=self.activations)
 
 
 def _prepare_sample(
@@ -61,8 +174,11 @@ def extract_activations(
     apply_chat_template: bool = False,
     layers: list[int] | None = None,
     batch_size: int = 8,
-) -> list[dict[str, Any]]:
+) -> Activations:
     """Extract activations from the model for the given dataset."""
+    if layers is None:
+        layers = list(range(model.config.num_hidden_layers + 1))
+
     # Prepare dataset
     dataset = _prepare_dataset(
         dataset,
@@ -94,89 +210,49 @@ def extract_activations(
     )
 
     # Extract activations
-    activations_all = []
+    metadata = {}
+    activations = {layer_idx: {} for layer_idx in layers}
     for batch in tqdm(dataloader, desc="Extracting activations"):
         input_ids = batch["input_ids"].to(model.device)
         attention_mask = batch["attention_mask"].to(model.device)
 
-        # Extract hidden states for specified layers
+        # Forward pass
         outputs = model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
         )
-        if layers is None:
-            hidden_states = outputs.hidden_states
-        else:
-            hidden_states = [outputs.hidden_states[layer] for layer in layers]
-        hidden_states = torch.stack(hidden_states, dim=2)  # shape: (batch_size, num_tokens, num_layers, hidden_size)
 
-        # Save activations for each sample without padding
-        for i, id in enumerate(batch["ids"]):
+        # Extract activations for each sample
+        for i, sample_id in enumerate(batch["ids"]):
+            # Get mask to remove padding
             mask = attention_mask[i].bool()
+            # Store metadata
             tokens = tokenizer.convert_ids_to_tokens(input_ids[i, mask])
             text = tokenizer.convert_tokens_to_string(tokens)
-            activations = hidden_states[i, mask]  # shape: (num_valid_tokens, num_layers, hidden_size)
-            activations_all.append(
-                {
-                    "id": id,
-                    "text": text,
-                    "tokens": tokens,
-                    "activations": activations.float().cpu().numpy(),
-                    "is_safe": batch["is_safe"][i],
-                    "is_adversarial": batch["is_adversarial"][i],
-                }
-            )
+            metadata[sample_id] = {
+                "id": sample_id,
+                "text": text,
+                "tokens": tokens,
+                "is_safe": batch["is_safe"][i],
+                "is_adversarial": batch["is_adversarial"][i],
+            }
+            # Store activations
+            for layer_idx in layers:
+                acts = outputs.hidden_states[layer_idx][i, mask]  # shape: (num_valid_tokens, hidden_size)
+                activations[layer_idx][sample_id] = acts.float().cpu().numpy()
 
+    num_samples = len(metadata)
+    num_tokens = sum(len(meta["tokens"]) for meta in metadata.values())
+    num_layers = len(layers)
+    hidden_size = acts.shape[1:]
+    num_bytes = sum(acts.nbytes for layer_idx in layers for acts in activations[layer_idx].values())
     print(
-        f"Extracted activations for {len(activations_all)} samples"
-        f"\n  Number of tokens:     {sum(result['activations'].shape[0] for result in activations_all)}"
-        f"\n  Shape of activations: {activations_all[0]['activations'].shape[1:]}"
-        f"\n  Total size:           {sum(result['activations'].nbytes for result in activations_all) / 1024 / 1024:.1f} MB"
+        f"Extracted activations for {num_samples} samples"
+        f"\n  Number of tokens:     {num_tokens}"
+        f"\n  Number of layers:     {num_layers}"
+        f"\n  Shape of activations: {hidden_size}"
+        f"\n  Total size:           {num_bytes / 1024 / 1024:.1f} MB"
     )
 
-    return activations_all
-
-
-def pool_activations(activations: np.ndarray, pool_method: str | slice, include_bos: bool) -> np.ndarray:
-    """Helper to pool activations per sample."""
-    if not include_bos:
-        activations = activations[1:]
-
-    if isinstance(pool_method, slice):
-        return activations[pool_method]
-    elif pool_method == "first":
-        return activations[:1]
-    elif pool_method == "mid":
-        mid_idx = len(activations) // 2
-        return activations[mid_idx : mid_idx + 1]
-    elif pool_method == "last":
-        return activations[-1:]
-    elif pool_method == "mean":
-        return activations.mean(axis=0, keepdims=True)
-    elif pool_method == "all":
-        return activations
-    else:
-        raise ValueError(f"Unknown pool_method: '{pool_method}'")
-
-
-def pool_tokens(tokens: list[str], pool_method: str | slice, include_bos: bool) -> np.ndarray:
-    """Helper to pool tokens per sample."""
-    if not include_bos:
-        tokens = tokens[1:]
-
-    if isinstance(pool_method, slice):
-        return tokens[pool_method]
-    elif pool_method == "first":
-        return tokens[:1]
-    elif pool_method == "mid":
-        mid_idx = len(tokens) // 2
-        return tokens[mid_idx : mid_idx + 1]
-    elif pool_method == "last":
-        return tokens[-1:]
-    elif pool_method == "mean":
-        return ["mean"]
-    elif pool_method == "all":
-        return tokens
-    else:
-        raise ValueError(f"Unknown pool_method: '{pool_method}'")
+    return Activations(metadata=metadata, activations=activations)

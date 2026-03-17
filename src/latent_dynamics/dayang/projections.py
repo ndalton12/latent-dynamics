@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Literal
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,28 +10,23 @@ from plotly.subplots import make_subplots
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
-from latent_dynamics.dayang.activations import pool_activations, pool_tokens
+from latent_dynamics.dayang.activations import Activations, PoolMethod
 
 
 def compute_layerwise_pca(
-    activations_all: list[dict[str, Any]],
-    pool_method: Literal["all", "first", "mid", "last", "mean"] = "all",
+    activations: Activations,
+    pool_method: PoolMethod,
     include_bos: bool = False,
     num_components: int = 2,
 ) -> list[PCA]:
     """Compute PCA for each layer and plot explained variance ratio."""
-    num_layers = activations_all[0]["activations"].shape[1]
     pcas = []
     explained_ratios = []
 
-    for layer_idx in tqdm(range(num_layers), desc="Computing layer-wise PCA"):
+    for layer_idx in tqdm(activations.layers, desc="Computing layer-wise PCA"):
         # Aggregate activations across all samples for the current layer
-        activations_per_layer = []
-        for sample in activations_all:
-            activations = sample["activations"][:, layer_idx, :]
-            activations_pooled = pool_activations(activations, pool_method, include_bos)
-            activations_per_layer.append(activations_pooled)
-        activations_per_layer = np.concatenate(activations_per_layer, axis=0)
+        samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+        activations_per_layer = np.concatenate([sample["activations"] for sample in samples], axis=0)
 
         # Fit PCA for the current layer
         pca = PCA(n_components=num_components)
@@ -60,9 +55,9 @@ def plot_layerwise_pca_ratio(pcas: list[PCA]):
 
 
 def plot_layerwise_pca(
-    activations_all: list[dict[str, Any]],
+    activations: Activations,
     pcas: list[PCA],
-    pool_method: Literal["all", "last", "mean"] = "all",
+    pool_method: PoolMethod,
     include_bos: bool = False,
     ncols: int = 5,
     backend: Literal["matplotlib", "plotly"] = "plotly",
@@ -74,15 +69,13 @@ def plot_layerwise_pca(
     if backend == "matplotlib":
         fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 3.6 * nrows), squeeze=False)
         axes = axes.flatten()
-        for layer_idx, pca in enumerate(tqdm(pcas, desc="Plotting layer-wise PCA")):
-            ax = axes[layer_idx]
+        for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise PCA"), pcas)):
+            ax = axes[i]
 
-            for sample in activations_all:
-                # Pool activations for the current layer
-                activations = sample["activations"][:, layer_idx, :]
-                activations_pooled = pool_activations(activations, pool_method, include_bos)
+            samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+            for sample in samples:
                 # Project pooled activations onto the first 2 PCs
-                activations_proj = pca.transform(activations_pooled)
+                activations_proj = pca.transform(sample["activations"])
 
                 # Filter for extreme outliers
                 mask_outlier = np.any(np.abs(activations_proj) >= 10000, axis=1)
@@ -142,23 +135,18 @@ def plot_layerwise_pca(
         fig.tight_layout()
         plt.show()
     elif backend == "plotly":
-        fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {i}" for i in range(num_layers)])
+        fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
 
-        for layer_idx, pca in enumerate(tqdm(pcas, desc="Plotting layer-wise PCA")):
-            row = (layer_idx // ncols) + 1
-            col = (layer_idx % ncols) + 1
+        for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise PCA"), pcas)):
+            row = (i // ncols) + 1
+            col = (i % ncols) + 1
 
-            for sample in activations_all:
-                # Pool activations for the current layer
-                activations = sample["activations"][:, layer_idx, :]
-                activations_pooled = pool_activations(activations, pool_method, include_bos)
+            samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+            for sample in samples:
                 # Project pooled activations onto the first 2 PCs
-                activations_proj = pca.transform(activations_pooled)
+                activations_proj = pca.transform(sample["activations"])
 
-                # Pool tokens for annotation
-                tokens = sample["tokens"]
-                tokens_pooled = pool_tokens(tokens, pool_method, include_bos)
-
+                # Create text for tooltip
                 def process_text(text):
                     import html
                     import textwrap
@@ -166,10 +154,14 @@ def plot_layerwise_pca(
                     return "<br>".join(textwrap.wrap(html.escape(text), width=80))
 
                 text = [
-                    f"ID: {sample['id']}<br>Token position: {i + 1}/{len(tokens_pooled)}<br>Token: '{token}'<br><extra>{process_text(sample['text'])}</extra>"
-                    for i, token in enumerate(tokens_pooled)
+                    f"ID: {sample['id']}"
+                    f"<br>Token position: {i + 1}/{len(sample['tokens'])}"
+                    f"<br>Token: '{token}'"
+                    f"<br><extra>{process_text(sample['text'])}</extra>"
+                    for i, token in enumerate(sample["tokens"])
                 ]
 
+                # Plot the activations in the PCA space
                 color = "green" if sample["is_safe"] else "red"
                 symbol = "x" if sample["is_adversarial"] else "circle"
                 alpha = 0.5 if sample["is_adversarial"] else 0.25

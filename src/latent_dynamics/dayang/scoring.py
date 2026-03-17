@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from typing import Any, Literal
+from typing import Literal
 
 import numpy as np
 import plotly.graph_objects as go
@@ -12,7 +12,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from tqdm.auto import tqdm
 
-from latent_dynamics.dayang.activations import pool_activations, pool_tokens
+from latent_dynamics.dayang.activations import Activations, PoolMethod
 
 
 class Reader(ABC):
@@ -80,26 +80,24 @@ def get_reader(method: str, **kwargs) -> Reader:
 
 
 def compute_layerwise_score(
-    activations_all: list[dict[str, Any]],
+    activations: Activations,
     method: str = "difference_in_mean",
-    pool_method: Literal["all", "first", "mid", "last", "mean"] = "all",
+    pool_method: PoolMethod = "all",
     include_bos: bool = False,
 ) -> list[Reader]:
     """Train a given reader per layer on activations, differentiating safe vs. unsafe inputs."""
-    num_layers = activations_all[0]["activations"].shape[1]
     readers = []
 
-    for layer_idx in tqdm(range(num_layers), desc="Training layer-wise reader"):
+    for layer_idx in tqdm(activations.layers, desc="Training layer-wise reader"):
         # Aggregate activations and labels across all samples for the current layer
+        samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+
         activations_per_layer = []
         labels_per_layer = []
-        for sample in activations_all:
-            activations = sample["activations"][:, layer_idx, :]
-            activations_pooled = pool_activations(activations, pool_method, include_bos)
-            activations_per_layer.append(activations_pooled)
-
-            label = int(sample["is_safe"])
-            labels_per_layer.extend([label] * len(activations_pooled))
+        for sample in samples:
+            acts = sample["activations"]
+            activations_per_layer.append(acts)
+            labels_per_layer.extend([int(sample["is_safe"])] * len(acts))
 
         activations_per_layer = np.concatenate(activations_per_layer, axis=0)
         labels_per_layer = np.array(labels_per_layer)
@@ -113,9 +111,9 @@ def compute_layerwise_score(
 
 
 def plot_layerwise_score(
-    activations_all: list[dict[str, Any]],
+    activations: Activations,
     readers: list[Reader],
-    pool_method: Literal["all", "last", "mean"] = "all",
+    pool_method: PoolMethod,
     include_bos: bool = False,
     ncols: int = 5,
     backend: Literal["plotly"] = "plotly",
@@ -127,23 +125,19 @@ def plot_layerwise_score(
     num_layers = len(readers)
     nrows = math.ceil(num_layers / ncols)
 
-    fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {i}" for i in range(num_layers)])
+    fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
 
-    for layer_idx, reader in enumerate(tqdm(readers, desc="Plotting layer-wise scores")):
-        row = (layer_idx // ncols) + 1
-        col = (layer_idx % ncols) + 1
+    for i, (layer_idx, reader) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise scores"), readers)):
+        row = (i // ncols) + 1
+        col = (i % ncols) + 1
 
-        for sample in activations_all:
-            # Pool activations for the current layer
-            activations = sample["activations"][:, layer_idx, :]
-            activations_pooled = pool_activations(activations, pool_method, include_bos)
-
+        samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+        for sample in samples:
             # Predict scores using the reader
-            scores = reader.predict(activations_pooled)
+            scores = reader.predict(sample["activations"])
 
             # Pool tokens for annotation
-            tokens = sample["tokens"]
-            tokens_pooled = pool_tokens(tokens, pool_method, include_bos)
+            tokens_pooled = sample["tokens"]
 
             def process_text(text):
                 import html
