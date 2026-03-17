@@ -9,47 +9,47 @@ from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-def prepare_dataset(
-    dataset: Dataset,
+def _prepare_sample(
+    sample,
     tokenizer: AutoTokenizer,
-    # include_response: bool = False,
-    apply_chat_template: bool = True,
-) -> Dataset:
-    """Prepare prompts and completions in the `input` column."""
-
+    include_response: bool | str,
+    apply_chat_template: bool = False,
+) -> dict[str, str]:
+    # Create conversation messages
+    messages = [{"role": "user", "content": [{"type": "text", "text": sample["prompt"]}]}]
+    if include_response:
+        response = sample["response"] if isinstance(include_response, bool) else include_response
+        messages.append({"role": "assistant", "content": [{"type": "text", "text": response}]})
+    # Format messages into input string
     if apply_chat_template:
-        # Apply chat template
-        def apply_chat_template(sample):
-            prompt = tokenizer.apply_chat_template(
-                [{"role": "user", "content": [{"type": "text", "text": sample["prompt"]}]}],
-                add_generation_prompt=True,
-                continue_final_message=False,
-                tokenize=False,
-            )
-            # if "response" in sample:
-            #     messages = [
-            #         {"role": "user", "content": [{"type": "text", "text": sample["prompt"]}]},
-            #         {"role": "assistant", "content": [{"type": "text", "text": sample["response"]}]},
-            #     ]
-            #     response = tokenizer.apply_chat_template(
-            #         messages,
-            #         add_generation_prompt=not include_response,
-            #         continue_final_message=include_response,
-            #         tokenize=False,
-            #     )[len(prompt) :]
-            return {
-                "input": prompt,
-                # "response": response if include_response else None,
-            }
-
-        dataset = dataset.map(
-            apply_chat_template,
-            desc="Applying chat template",
-            remove_columns=["prompt"],
+        input = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=not include_response,
+            continue_final_message=include_response,
+            tokenize=False,
         )
     else:
-        dataset = dataset.rename_column("prompt", "input")
+        input = "\n\n".join(message["content"][0]["text"] for message in messages)
+    return {"input": input}
 
+
+def _prepare_dataset(
+    dataset: Dataset,
+    tokenizer: AutoTokenizer,
+    include_response: bool | str = False,
+    apply_chat_template: bool = False,
+) -> Dataset:
+    """Prepare dataset by creating `input` column based on prompt and responses."""
+    dataset = dataset.map(
+        _prepare_sample,
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "include_response": include_response,
+            "apply_chat_template": apply_chat_template,
+        },
+        remove_columns=["prompt"] + (["response"] if include_response else []),
+        desc="Preparing dataset",
+    )
     return dataset
 
 
@@ -57,27 +57,35 @@ def extract_activations(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     dataset: Dataset,
+    include_response: bool | str = False,
+    apply_chat_template: bool = False,
     layers: list[int] | None = None,
     batch_size: int = 8,
 ) -> list[dict[str, Any]]:
     """Extract activations from the model for the given dataset."""
+    # Prepare dataset
+    dataset = _prepare_dataset(
+        dataset,
+        tokenizer,
+        include_response=include_response,
+        apply_chat_template=apply_chat_template,
+    )
 
     # Create dataloader
     def collate_fn(samples):
-        input = tokenizer(
+        inputs = tokenizer(
             [sample["input"] for sample in samples],
             padding=True,
             return_tensors="pt",
-            # add_special_tokens=False,
+            add_special_tokens=not apply_chat_template,  # avoid adding second BOS token when applying chat template
         )
         return {
             "ids": [sample["id"] for sample in samples],
             "is_safe": [sample["is_safe"] for sample in samples],
             "is_adversarial": [sample["is_adversarial"] for sample in samples],
-            **input,
+            **inputs,
         }
 
-    dataset = prepare_dataset(dataset, tokenizer, apply_chat_template=False)
     dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
