@@ -1,28 +1,53 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
+import pandas as pd
 import torch
 from datasets import Dataset
+from natsort import natsort_keygen
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 PoolMethod = Literal["all", "first", "mid", "last", "mean"] | slice
+
+SPECIAL_TOKENS = {
+    # Gemma3
+    "<bos>",
+    "<eos>",
+    "<pad>",
+    "<start_of_turn>",
+    "<end_of_turn>",
+    # Qwen3
+    "<|endoftext|>",
+    "<|im_start|>",
+    "<|im_end|>",
+    # Llama3.1
+    "<|begin_of_text|>",
+    "<|eot_id|>",
+    "<|start_header_id|>",
+    "<|end_header_id|>",
+}
 
 
 def _pool(
     activations: np.ndarray,
     tokens: list[str],
     pool_method: PoolMethod,
-    include_bos: bool,
+    exclude_bos: bool = True,
+    exclude_special_tokens: bool | list[str] = True,
 ) -> tuple[np.ndarray, list[str]]:
-    if not include_bos:
+    if exclude_bos:
         activations = activations[1:]
         tokens = tokens[1:]
+    if exclude_special_tokens:
+        exclude_special_tokens = SPECIAL_TOKENS if exclude_special_tokens is True else exclude_special_tokens
+        mask = [t not in exclude_special_tokens for t in tokens]
+        activations = activations[mask]
+        tokens = [t for t, m in zip(tokens, mask) if m]
 
     if isinstance(pool_method, slice):
         activations_pooled, tokens_pooled = activations[pool_method], tokens[pool_method]
@@ -45,7 +70,7 @@ def _pool(
 
 @dataclass
 class Activations:
-    metadata: dict[Any, dict[str, Any]]
+    metadata: pd.DataFrame
     activations: dict[int, dict[Any, np.ndarray]]
 
     @property
@@ -63,16 +88,15 @@ class Activations:
     def save(self, path: str | Path):
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        with open(path / "metadata.json", "w") as f:
-            json.dump(self.metadata, f, indent=2)
+        self.metadata.to_json(path / "metadata.json", orient="index", indent=2)
         for layer_idx, acts in self.activations.items():
             np.savez_compressed(path / f"layer_{layer_idx}.npz", **{str(k): v for k, v in acts.items()})
 
     @classmethod
     def load(cls, path: str | Path) -> "Activations":
         path = Path(path)
-        with open(path / "metadata.json", "r") as f:
-            metadata = json.load(f)
+        metadata = pd.read_json(path / "metadata.json", orient="index")
+        metadata.index.name = "id"
 
         activations = {}
         for file in path.glob("layer_*.npz"):
@@ -87,27 +111,40 @@ class Activations:
         sample_id: str = None,
         layer_idx: int | None = None,
         pool_method: str | slice = "all",
-        include_bos: bool = False,
+        exclude_bos: bool = True,
+        exclude_special_tokens: bool | list[str] = True,
     ) -> Any:
         """
         If `sample_id` and `layer_idx` are provided, returns a pooled dictionary for that sample.
         If only `layer_idx` is provided, returns a list of pooled dictionaries for all samples in that layer.
         """
         if sample_id is not None and layer_idx is not None:
-            metadata = self.metadata[sample_id]
+            metadata = self.metadata.loc[sample_id].to_dict()
             activations = self.activations[layer_idx][sample_id]
-            activations_pooled, tokens_pooled = _pool(activations, metadata["tokens"], pool_method, include_bos)
+            activations_pooled, tokens_pooled = _pool(
+                activations,
+                metadata["tokens"],
+                pool_method,
+                exclude_bos,
+                exclude_special_tokens,
+            )
             return {
+                "id": sample_id,
                 **metadata,
                 "activations": activations_pooled,
                 "tokens": tokens_pooled,
             }
-
         elif layer_idx is not None:
             results = []
-            for sample_id in self.metadata.keys():
+            for sample_id in self.metadata.index:
                 results.append(
-                    self.get(sample_id=sample_id, layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+                    self.get(
+                        sample_id=sample_id,
+                        layer_idx=layer_idx,
+                        pool_method=pool_method,
+                        exclude_bos=exclude_bos,
+                        exclude_special_tokens=exclude_special_tokens,
+                    )
                 )
             return results
         else:
@@ -118,8 +155,7 @@ class Activations:
 
         This method only creates a subset of the metadata, while the activations dictionary is kept as a reference
         to save memory."""
-        metadata_new = {sample_id: value for sample_id, value in self.metadata.items() if sample_id in sample_ids}
-        return Activations(metadata=metadata_new, activations=self.activations)
+        return Activations(metadata=self.metadata.loc[sample_ids], activations=self.activations)
 
 
 def _prepare_sample(
@@ -210,7 +246,7 @@ def extract_activations(
     )
 
     # Extract activations
-    metadata = {}
+    metadata = []
     activations = {layer_idx: {} for layer_idx in layers}
     for batch in tqdm(dataloader, desc="Extracting activations"):
         input_ids = batch["input_ids"].to(model.device)
@@ -230,20 +266,22 @@ def extract_activations(
             # Store metadata
             tokens = tokenizer.convert_ids_to_tokens(input_ids[i, mask])
             text = tokenizer.convert_tokens_to_string(tokens)
-            metadata[sample_id] = {
-                "id": sample_id,
-                "text": text,
-                "tokens": tokens,
-                "is_safe": batch["is_safe"][i],
-                "is_adversarial": batch["is_adversarial"][i],
-            }
+            metadata.append(
+                {
+                    "id": sample_id,
+                    "text": text,
+                    "tokens": tokens,
+                    "is_safe": batch["is_safe"][i],
+                    "is_adversarial": batch["is_adversarial"][i],
+                }
+            )
             # Store activations
             for layer_idx in layers:
                 acts = outputs.hidden_states[layer_idx][i, mask]  # shape: (num_valid_tokens, hidden_size)
                 activations[layer_idx][sample_id] = acts.float().cpu().numpy()
 
     num_samples = len(metadata)
-    num_tokens = sum(len(meta["tokens"]) for meta in metadata.values())
+    num_tokens = sum(len(meta["tokens"]) for meta in metadata)
     num_layers = len(layers)
     hidden_size = acts.shape[1:]
     num_bytes = sum(acts.nbytes for layer_idx in layers for acts in activations[layer_idx].values())
@@ -255,4 +293,6 @@ def extract_activations(
         f"\n  Total size:           {num_bytes / 1024 / 1024:.1f} MB"
     )
 
+    metadata = pd.DataFrame(metadata).set_index("id")
+    metadata.sort_index(inplace=True, key=natsort_keygen())
     return Activations(metadata=metadata, activations=activations)

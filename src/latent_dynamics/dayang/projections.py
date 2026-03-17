@@ -16,7 +16,8 @@ from latent_dynamics.dayang.activations import Activations, PoolMethod
 def compute_layerwise_pca(
     activations: Activations,
     pool_method: PoolMethod,
-    include_bos: bool = False,
+    exclude_bos: bool = True,
+    exclude_special_tokens: bool | list[str] = True,
     num_components: int = 2,
 ) -> list[PCA]:
     """Compute PCA for each layer and plot explained variance ratio."""
@@ -25,7 +26,12 @@ def compute_layerwise_pca(
 
     for layer_idx in tqdm(activations.layers, desc="Computing layer-wise PCA"):
         # Aggregate activations across all samples for the current layer
-        samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+        samples = activations.get(
+            layer_idx=layer_idx,
+            pool_method=pool_method,
+            exclude_bos=exclude_bos,
+            exclude_special_tokens=exclude_special_tokens,
+        )
         activations_per_layer = np.concatenate([sample["activations"] for sample in samples], axis=0)
 
         # Fit PCA for the current layer
@@ -58,7 +64,8 @@ def plot_layerwise_pca(
     activations: Activations,
     pcas: list[PCA],
     pool_method: PoolMethod,
-    include_bos: bool = False,
+    exclude_bos: bool = True,
+    exclude_special_tokens: bool | list[str] = True,
     ncols: int = 5,
     backend: Literal["matplotlib", "plotly"] = "plotly",
 ) -> None:
@@ -72,7 +79,12 @@ def plot_layerwise_pca(
         for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise PCA"), pcas)):
             ax = axes[i]
 
-            samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+            samples = activations.get(
+                layer_idx=layer_idx,
+                pool_method=pool_method,
+                exclude_bos=exclude_bos,
+                exclude_special_tokens=exclude_special_tokens,
+            )
             for sample in samples:
                 # Project pooled activations onto the first 2 PCs
                 activations_proj = pca.transform(sample["activations"])
@@ -117,7 +129,7 @@ def plot_layerwise_pca(
                     )
                     # # Annotate with tokens
                     # if annotate_tokens:
-                    #     tokens = sample["tokens"][1:] if not include_bos else sample["tokens"]
+                    #     tokens = sample["tokens"]
                     #     if layer_idx == 0:
                     #         print(tokens)
                     #     for token, (x, y) in zip(tokens, activations_proj):
@@ -131,7 +143,7 @@ def plot_layerwise_pca(
         for ax in axes[num_layers:]:
             ax.axis("off")
 
-        fig.suptitle(f"PCA Projections (pool='{pool_method}', include_bos={include_bos})")
+        fig.suptitle(f"PCA Projections (pool='{pool_method}'")
         fig.tight_layout()
         plt.show()
     elif backend == "plotly":
@@ -141,7 +153,12 @@ def plot_layerwise_pca(
             row = (i // ncols) + 1
             col = (i % ncols) + 1
 
-            samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+            samples = activations.get(
+                layer_idx=layer_idx,
+                pool_method=pool_method,
+                exclude_bos=exclude_bos,
+                exclude_special_tokens=exclude_special_tokens,
+            )
             for sample in samples:
                 # Project pooled activations onto the first 2 PCs
                 activations_proj = pca.transform(sample["activations"])
@@ -187,7 +204,7 @@ def plot_layerwise_pca(
         fig.update_layout(
             height=300 * nrows,
             width=300 * ncols,
-            title_text=f"PCA Projections (pool='{pool_method}', include_bos={include_bos})",
+            title_text=f"PCA Projections (pool='{pool_method}')",
             showlegend=False,
             hovermode="closest",
         )

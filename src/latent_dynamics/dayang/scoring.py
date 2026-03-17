@@ -83,14 +83,20 @@ def compute_layerwise_score(
     activations: Activations,
     method: str = "difference_in_mean",
     pool_method: PoolMethod = "all",
-    include_bos: bool = False,
+    exclude_bos: bool = True,
+    exclude_special_tokens: bool | list[str] = True,
 ) -> list[Reader]:
     """Train a given reader per layer on activations, differentiating safe vs. unsafe inputs."""
     readers = []
 
     for layer_idx in tqdm(activations.layers, desc="Training layer-wise reader"):
         # Aggregate activations and labels across all samples for the current layer
-        samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+        samples = activations.get(
+            layer_idx=layer_idx,
+            pool_method=pool_method,
+            exclude_bos=exclude_bos,
+            exclude_special_tokens=exclude_special_tokens,
+        )
 
         activations_per_layer = []
         labels_per_layer = []
@@ -114,7 +120,8 @@ def plot_layerwise_score(
     activations: Activations,
     readers: list[Reader],
     pool_method: PoolMethod,
-    include_bos: bool = False,
+    exclude_bos: bool = True,
+    exclude_special_tokens: bool | list[str] = True,
     ncols: int = 5,
     backend: Literal["plotly"] = "plotly",
 ) -> None:
@@ -131,7 +138,12 @@ def plot_layerwise_score(
         row = (i // ncols) + 1
         col = (i % ncols) + 1
 
-        samples = activations.get(layer_idx=layer_idx, pool_method=pool_method, include_bos=include_bos)
+        samples = activations.get(
+            layer_idx=layer_idx,
+            pool_method=pool_method,
+            exclude_bos=exclude_bos,
+            exclude_special_tokens=exclude_special_tokens,
+        )
         for sample in samples:
             # Predict scores using the reader
             scores = reader.predict(sample["activations"])
@@ -176,7 +188,7 @@ def plot_layerwise_score(
     fig.update_layout(
         height=300 * nrows,
         width=300 * ncols,
-        title_text=f"Layer-wise Concept Scores (pool='{pool_method}', include_bos={include_bos})",
+        title_text=f"Layer-wise Concept Scores (pool='{pool_method}')",
         showlegend=False,
         hovermode="closest",
     )
