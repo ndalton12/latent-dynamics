@@ -216,8 +216,8 @@ def load_dataset_from_spec(
         f"\n  Prompt length (avg):   {avg_prompt_length_chars:.1f} chars, {avg_prompt_length_words:.1f} words"
         f"\n  Response length (avg): {avg_response_length_chars:.1f} chars, {avg_response_length_words:.1f} words"
         f"\n  Samples:"
-        f"\n    Safe:\n{'\n'.join(f'        - {sample}' for sample in samples_safe)}"
-        f"\n    Unsafe:\n{'\n'.join(f'        - {sample}' for sample in samples_unsafe)}"
+        f"\n    Safe:\n{'\n'.join(f'      - {sample}' for sample in samples_safe)}"
+        f"\n    Unsafe:\n{'\n'.join(f'      - {sample}' for sample in samples_unsafe)}"
     )
 
     return dataset
