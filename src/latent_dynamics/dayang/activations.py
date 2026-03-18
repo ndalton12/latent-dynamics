@@ -89,7 +89,7 @@ class Activations:
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         self.metadata.to_json(path / "metadata.json", orient="index", indent=2)
-        for layer_idx, acts in self.activations.items():
+        for layer_idx, acts in tqdm(self.activations.items(), desc="Saving activations"):
             np.savez_compressed(path / f"layer_{layer_idx}.npz", **{str(k): v for k, v in acts.items()})
 
     @classmethod

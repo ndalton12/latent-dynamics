@@ -22,19 +22,26 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
     activations: Activations | None = None
 
-    def __init__(self, path_activations: str | Path = ".", **kwargs):
-        path_activations = Path(path_activations)
-
-        # Create widgets
+    def __init__(self, search_path: str | Path = ".", **kwargs):
+        self.search_path = Path(search_path)
         models = list(MODEL_REGISTRY.keys())
         datasets = list(DATASET_REGISTRY.keys())
-        self.w_model = widgets.Dropdown(options=models, value=models[0], description="Model")
-        self.w_dataset = widgets.Dropdown(options=datasets, value=datasets[0], description="Dataset")
-        self.w_max_samples = widgets.IntText(value=200, min=1, description="Max samples:")
+
+        # Set defaults
+        model = kwargs.get("model", models[0])
+        dataset = kwargs.get("dataset", datasets[0])
+        max_samples = kwargs.get("max_samples", 200)
+        include_response = kwargs.get("include_response", False)
+        apply_chat_template = kwargs.get("apply_chat_template", False)
+
+        # Create widgets
+        self.w_model = widgets.Dropdown(options=models, value=model, description="Model")
+        self.w_dataset = widgets.Dropdown(options=datasets, value=dataset, description="Dataset")
+        self.w_max_samples = widgets.IntText(value=max_samples, min=1, description="Max samples:")
         self.w_include_response = widgets.Dropdown(
-            options=[False, True, "Sorry", "Sure"], value=False, description="Include response"
+            options=[False, True, "Sorry", "Sure"], value=include_response, description="Include response"
         )
-        self.w_apply_chat_template = widgets.Checkbox(value=False, description="Apply chat template")
+        self.w_apply_chat_template = widgets.Checkbox(value=apply_chat_template, description="Apply chat template")
         self.btn_extract = widgets.Button(description="Extract Activations", button_style="primary")
         col_extract = widgets.VBox(
             [
@@ -47,7 +54,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             ]
         )
 
-        self.w_path = widgets.Combobox(options=get_activation_folders(path_activations), description="Path")
+        self.w_path = widgets.Combobox(options=get_activation_folders(self.search_path), description="Path")
         self.btn_load = widgets.Button(description="Load Activations", button_style="primary")
         self.btn_save = widgets.Button(description="Save Activations", button_style="success", disabled=True)
         col_load = widgets.VBox(
@@ -78,7 +85,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             yield
         finally:
             self.btn_extract.disabled = False
-            self.btn_save.disabled = self.value is None
+            self.btn_save.disabled = self.activations is None
             self.btn_load.disabled = False
 
     def do_extract(self, *args):
@@ -98,6 +105,14 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
             # Update state
             self.__update_value(activations)
+
+            # Update path with default path
+            default_path = (
+                self.search_path
+                / f"{self.w_dataset.value.replace('/', '_')}-{self.w_max_samples.value}"
+                / self.w_model.value
+            )
+            self.w_path.value = str(default_path)
 
     def do_load(self, *args):
         path = self.w_path.value
@@ -122,7 +137,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
     def do_save(self, *args):
         path = self.w_path.value
-        if not path or self.value is None:
+        if not path or self.activations is None:
             return
 
         with self.update_buttons(), self.out:
@@ -135,26 +150,32 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
             # Save activations
             print(f"Saving activations to '{path}'...")
-            self.value.save(path)
+            self.activations.save(path)
             print("Saved successfully!")
 
             # Update load options
-            self.w_path.options = get_activation_folders(path)
+            self.w_path.options = get_activation_folders(self.search_path)
 
 
 class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
 
     def __init__(self, **kwargs):
+        # Set defaults
+        pool = kwargs.get("pool", "last")
+        pool_slice = kwargs.get("pool_slice", "::")
+        exclude_bos = kwargs.get("exclude_bos", True)
+        exclude_special = kwargs.get("exclude_special", True)
+
         # Create widgets
         self.w_safe = widgets.SelectMultiple(description="Safe samples")
         self.w_unsafe = widgets.SelectMultiple(description="Unsafe samples")
         self.w_pool = widgets.Dropdown(
-            options=["all", "first", "mid", "last", "mean", "slice"], value="last", description="Tokens"
+            options=["all", "first", "mid", "last", "mean", "slice"], value=pool, description="Tokens"
         )
-        self.w_pool_slice = widgets.Text(value="::", description="Tokens slice")
-        self.w_exclude_bos = widgets.Checkbox(value=True, description="Exclude BOS token")
-        self.w_exclude_special = widgets.Checkbox(value=True, description="Exclude special tokens")
+        self.w_pool_slice = widgets.Text(value=pool_slice, description="Tokens slice")
+        self.w_exclude_bos = widgets.Checkbox(value=exclude_bos, description="Exclude BOS token")
+        self.w_exclude_special = widgets.Checkbox(value=exclude_special, description="Exclude special tokens")
 
         super().__init__(
             children=[
@@ -186,7 +207,10 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         self.value = not self.value
 
     def update_pool_slice(self, *args):
-        self.w_pool_slice.layout.display = None if self.w_pool.value == "slice" else "none"
+        if self.w_pool.value == "slice":
+            self.w_pool_slice.layout.display = None  # show the widget
+        else:
+            self.w_pool_slice.layout.display = "none"  # hide the widget
 
     def set_activations(self, activations: Activations):
         samples_safe = activations.metadata[activations.metadata["is_safe"]].index.tolist()
