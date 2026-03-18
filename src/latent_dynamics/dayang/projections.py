@@ -70,7 +70,7 @@ def plot_layerwise_pca(
     backend: Literal["matplotlib", "plotly"] = "plotly",
 ) -> None:
     """Visualize PCA projections per layer."""
-    num_layers = len(pcas)
+    num_layers = activations.num_layers
     nrows = math.ceil(num_layers / ncols)
 
     if backend == "matplotlib":
@@ -89,34 +89,27 @@ def plot_layerwise_pca(
                 # Project pooled activations onto the first 2 PCs
                 activations_proj = pca.transform(sample["activations"])
 
-                # Filter for extreme outliers
-                mask_outlier = np.any(np.abs(activations_proj) >= 10000, axis=1)
-                activations_proj = activations_proj[~mask_outlier]
-                if sum(mask_outlier) > 0:
-                    print(
-                        f"Warning: Sample {sample['id']} has {sum(mask_outlier)} outlier tokens in layer {layer_idx} that are excluded from the plot"
-                    )
-
                 # Plot the activations in the PCA space
                 color = "tab:green" if sample["is_safe"] else "tab:red"
+                symbol = "x-" if sample["is_adversarial"] else "o-"
+                alpha = 0.5 if sample["is_adversarial"] else 0.25
                 ax.plot(
                     activations_proj[:, 0],
                     activations_proj[:, 1],
-                    "o-" if not sample["is_adversarial"] else "x-",
+                    symbol,
                     color=color,
-                    alpha=0.25 if not sample["is_adversarial"] else 0.5,
+                    alpha=alpha,
                     markersize=3,
                     linewidth=1.0,
                 )
 
-                if pool_method == "all":
-                    # Highlight the first and last token
+                # Plot start and endpoint if there are multiple activations
+                if len(activations_proj) > 1:
                     ax.plot(
                         activations_proj[0, 0],
                         activations_proj[0, 1],
                         "o",
                         color=color,
-                        alpha=0.75,
                         markersize=6,
                     )
                     ax.plot(
@@ -124,7 +117,6 @@ def plot_layerwise_pca(
                         activations_proj[-1, 1],
                         "^",
                         color=color,
-                        alpha=0.75,
                         markersize=6,
                     )
                     # # Annotate with tokens
@@ -135,6 +127,7 @@ def plot_layerwise_pca(
                     #     for token, (x, y) in zip(tokens, activations_proj):
                     #         ax.text(x, y, token, fontsize=6)
 
+            ax.grid(True, alpha=0.25)
             ax.set_title(f"Layer {layer_idx}")
             ax.set_xlabel("PC1")
             ax.set_ylabel("PC2")
@@ -143,7 +136,7 @@ def plot_layerwise_pca(
         for ax in axes[num_layers:]:
             ax.axis("off")
 
-        fig.suptitle(f"PCA Projections (pool='{pool_method}'")
+        fig.suptitle(f"PCA Projections (pool='{pool_method}')")
         fig.tight_layout()
         plt.show()
     elif backend == "plotly":

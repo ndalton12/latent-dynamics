@@ -129,7 +129,7 @@ def plot_layerwise_score(
     if backend != "plotly":
         raise NotImplementedError("Only plotly backend is supported for now.")
 
-    num_layers = len(readers)
+    num_layers = activations.num_layers
     nrows = math.ceil(num_layers / ncols)
 
     fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
