@@ -72,7 +72,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         self.btn_save.on_click(self.do_save)
         self.btn_load.on_click(self.do_load)
 
-    def __update_value(self, activations: Activations | None):
+    def _update_value(self, activations: Activations | None):
         self.activations = activations
         self.value = not self.value
 
@@ -93,8 +93,9 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             self.out.clear_output(wait=True)
 
             # Extract activations
+            max_samples = self.w_max_samples.value if self.w_max_samples.value > 0 else None
             model, tokenizer = load_model_and_tokenizer(self.w_model.value)
-            dataset = load_dataset_from_spec(self.w_dataset.value, max_samples=self.w_max_samples.value)
+            dataset = load_dataset_from_spec(self.w_dataset.value, max_samples=max_samples)
             activations = extract_activations(
                 model,
                 tokenizer,
@@ -104,15 +105,13 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             )
 
             # Update state
-            self.__update_value(activations)
+            self._update_value(activations)
 
             # Update path with default path
-            default_path = (
-                self.search_path
-                / f"{self.w_dataset.value.replace('/', '_')}-{self.w_max_samples.value}"
-                / self.w_model.value
-            )
-            self.w_path.value = str(default_path)
+            dataset_name = self.w_dataset.value.replace("/", "_")
+            if max_samples is not None:
+                dataset_name += f"-{max_samples}"
+            self.w_path.value = str(self.search_path / dataset_name / self.w_model.value)
 
     def do_load(self, *args):
         path = self.w_path.value
@@ -128,12 +127,11 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
                 return
 
             # Load activations
-            print(f"Loading activations from '{path}'...")
             activations = Activations.load(path)
-            print("Loaded successfully!")
+            print(f"Loaded activations: {path}")
 
             # Update state
-            self.__update_value(activations)
+            self._update_value(activations)
 
     def do_save(self, *args):
         path = self.w_path.value
@@ -149,9 +147,8 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
                 return
 
             # Save activations
-            print(f"Saving activations to '{path}'...")
             self.activations.save(path)
-            print("Saved successfully!")
+            print(f"Saved activations: {path}")
 
             # Update load options
             self.w_path.options = get_activation_folders(self.search_path)
@@ -162,8 +159,8 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
 
     def __init__(self, **kwargs):
         # Set defaults
-        pool = kwargs.get("pool", "last")
-        pool_slice = kwargs.get("pool_slice", "::")
+        pool = kwargs.get("pool", "slice")
+        pool_slice = kwargs.get("pool_slice", "-1::")
         exclude_bos = kwargs.get("exclude_bos", True)
         exclude_special = kwargs.get("exclude_special", True)
 
@@ -173,7 +170,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         self.w_pool = widgets.Dropdown(
             options=["all", "first", "mid", "last", "mean", "slice"], value=pool, description="Tokens"
         )
-        self.w_pool_slice = widgets.Text(value=pool_slice, description="Tokens slice")
+        self.w_pool_slice = widgets.Text(value=pool_slice, description="Slice")
         self.w_exclude_bos = widgets.Checkbox(value=exclude_bos, description="Exclude BOS token")
         self.w_exclude_special = widgets.Checkbox(value=exclude_special, description="Exclude special tokens")
 
@@ -192,7 +189,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         self.w_pool.observe(self.update_pool_slice, names="value")
         self.update_pool_slice()
 
-        self.w_exclude_special.observe(self.__update_value, names="value")
+        self.w_exclude_special.observe(self._update_value, names="value")
         for w in [
             self.w_safe,
             self.w_unsafe,
@@ -201,9 +198,9 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
             self.w_exclude_bos,
             self.w_exclude_special,
         ]:
-            w.observe(self.__update_value, names="value")
+            w.observe(self._update_value, names="value")
 
-    def __update_value(self, *args):
+    def _update_value(self, *args):
         self.value = not self.value
 
     def update_pool_slice(self, *args):
