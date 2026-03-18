@@ -134,6 +134,17 @@ def plot_layerwise_score(
 
     fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
 
+    import html
+    import textwrap
+
+    def escape_tokens(tokens: list[str]) -> list[str]:
+        return [html.escape(token.replace("\n", "\\n")) for token in tokens]
+
+    def process_tokens(tokens: list[str], highlight: int | None = None) -> str:
+        tokens = ["<b>" + token + "</b>" if i == highlight else token for i, token in enumerate(tokens)]
+        text = " ".join(tokens)
+        return "<br>".join(textwrap.wrap(text, width=80))
+
     for i, (layer_idx, reader) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise scores"), readers)):
         row = (i // ncols) + 1
         col = (i % ncols) + 1
@@ -148,18 +159,15 @@ def plot_layerwise_score(
             # Predict scores using the reader
             scores = reader.predict(sample["activations"])
 
-            # Pool tokens for annotation
-            tokens_pooled = sample["tokens"]
-
-            def process_text(text):
-                import html
-                import textwrap
-
-                return "<br>".join(textwrap.wrap(html.escape(text), width=80))
-
+            # Create text for tooltip
+            tokens = escape_tokens(sample["tokens"])
+            tokens_all = escape_tokens(sample["tokens_all"])
             text = [
-                f"ID: {sample['id']}<br>Token: '{token}'<br><extra>{process_text(sample['text'])}</extra>"
-                for token in tokens_pooled
+                f"ID: {sample['id']}"
+                f"<br>Position: {i + 1}/{len(sample['tokens'])}"
+                f"<br>Token: '{token}'"
+                f"<br><extra>{process_tokens(tokens_all, highlight=token_pos)}</extra>"
+                for i, (token, token_pos) in enumerate(zip(tokens, sample["token_positions"]))
             ]
 
             color = "green" if sample["is_safe"] else "red"
