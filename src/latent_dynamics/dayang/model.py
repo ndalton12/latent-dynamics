@@ -16,6 +16,16 @@ class ModelSpec:
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
+    # Small models for dev purposes
+    "gemma3_270m": ModelSpec(
+        path="google/gemma-3-270m-it",
+        dtype="bfloat16",
+    ),
+    "qwen3_0.6b": ModelSpec(
+        path="Qwen/Qwen3-0.6B",
+        dtype="bfloat16",
+    ),
+    # Large models for final eval
     "qwen3_8b": ModelSpec(
         path="Qwen/Qwen3-8B",
         dtype="bfloat16",
@@ -28,10 +38,6 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         path="google/gemma-3-4b-it",
         dtype="bfloat16",
     ),
-    "gemma3_270m": ModelSpec(
-        path="google/gemma-3-270m-it",
-        dtype="bfloat16",
-    ),  # small model for dev purposes
 }
 
 

@@ -66,31 +66,6 @@ SORRY_BENCH_CATEGORY_DESCRIPTIONS = [
 
 
 DATASET_REGISTRY: dict[str, DatasetSpec] = {
-    "sorry_bench": DatasetSpec(
-        path="sorry-bench/sorry-bench-202503",
-        split="train",
-        filter_fn=lambda sample: sample["turns"][0] is not None,  # filter out samples with null prompts
-        map_fn=lambda sample, i: {
-            "id": f"sorry_bench/{sample['question_id']}",
-            "prompt": sample["turns"][0],
-            "is_safe": False,
-            "is_adversarial": False,
-            "prompt_category": SORRY_BENCH_CATEGORY_DESCRIPTIONS[int(sample["category"]) - 1],
-            "prompt_style": sample["prompt_style"],
-        },
-    ),
-    "xstest": DatasetSpec(
-        path="Paul/XSTest",
-        split="train",
-        map_fn=lambda sample, i: {
-            "id": f"xstest/{sample['id']}",
-            "prompt": sample["prompt"],
-            "is_safe": sample["label"] == "safe",
-            "is_adversarial": False,
-            "prompt_type": sample["type"],
-            "prompt_focus": sample["focus"],
-        },
-    ),
     "wildjailbreak/train/vanilla": DatasetSpec(
         path="allenai/wildjailbreak",
         name="train",
@@ -167,6 +142,31 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
             "is_adversarial": False,
         },
     ),
+    "sorry_bench": DatasetSpec(
+        path="sorry-bench/sorry-bench-202503",
+        split="train",
+        filter_fn=lambda sample: sample["turns"][0] is not None,  # filter out samples with null prompts
+        map_fn=lambda sample, i: {
+            "id": f"sorry_bench/{sample['question_id']}",
+            "prompt": sample["turns"][0],
+            "is_safe": False,
+            "is_adversarial": False,
+            "prompt_category": SORRY_BENCH_CATEGORY_DESCRIPTIONS[int(sample["category"]) - 1],
+            "prompt_style": sample["prompt_style"],
+        },
+    ),
+    "xstest": DatasetSpec(
+        path="Paul/XSTest",
+        split="train",
+        map_fn=lambda sample, i: {
+            "id": f"xstest/{sample['id']}",
+            "prompt": sample["prompt"],
+            "is_safe": sample["label"] == "safe",
+            "is_adversarial": False,
+            "prompt_type": sample["type"],
+            "prompt_focus": sample["focus"],
+        },
+    ),
 }
 
 
@@ -200,6 +200,8 @@ def load_dataset_from_spec(
 
     avg_prompt_length_chars = np.mean([len(sample["prompt"]) for sample in dataset])
     avg_prompt_length_words = np.mean([len(sample["prompt"].split()) for sample in dataset])
+    avg_response_length_chars = np.mean([len(sample.get("response", "")) for sample in dataset])
+    avg_response_length_words = np.mean([len(sample.get("response", "").split()) for sample in dataset])
     num_total = len(dataset)
     num_safe = sum(dataset["is_safe"])
     num_unsafe = num_total - num_safe
@@ -207,11 +209,12 @@ def load_dataset_from_spec(
     samples_unsafe = dataset.filter(lambda sample: not sample["is_safe"]).select(range(5))
     print(
         f"Loaded dataset: {dataset_spec.path}"
-        f"\n  Number of samples:   {len(dataset)}"
-        f"\n    Safe:              {num_safe} ({num_safe / num_total * 100:.1f}%)"
-        f"\n    Unsafe:            {num_unsafe} ({num_unsafe / num_total * 100:.1f}%)"
-        f"\n  Columns:             {dataset.column_names}"
-        f"\n  Prompt length (avg): {avg_prompt_length_chars:.1f} chars, {avg_prompt_length_words:.1f} words"
+        f"\n  Number of samples:     {len(dataset)}"
+        f"\n    Safe:                {num_safe} ({num_safe / num_total * 100:.1f}%)"
+        f"\n    Unsafe:              {num_unsafe} ({num_unsafe / num_total * 100:.1f}%)"
+        f"\n  Columns:               {dataset.column_names}"
+        f"\n  Prompt length (avg):   {avg_prompt_length_chars:.1f} chars, {avg_prompt_length_words:.1f} words"
+        f"\n  Response length (avg): {avg_response_length_chars:.1f} chars, {avg_response_length_words:.1f} words"
         f"\n  Samples:"
         f"\n    Safe:\n{'\n'.join(f'      - {sample}' for sample in samples_safe)}"
         f"\n    Unsafe:\n{'\n'.join(f'      - {sample}' for sample in samples_unsafe)}"
