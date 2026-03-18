@@ -202,6 +202,37 @@ def _prepare_dataset(
     return dataset
 
 
+def _create_dataloader(
+    dataset: Dataset,
+    tokenizer: AutoTokenizer,
+    batch_size: int = 8,
+    **kwargs,
+) -> torch.utils.data.DataLoader:
+    """Create dataloader from the prepared dataset."""
+
+    def collate_fn(samples):
+        inputs = tokenizer(
+            [sample["input"] for sample in samples],
+            padding=True,
+            return_tensors="pt",
+            **kwargs,
+        )
+        return {
+            "ids": [sample["id"] for sample in samples],
+            "is_safe": [sample["is_safe"] for sample in samples],
+            "is_adversarial": [sample["is_adversarial"] for sample in samples],
+            **inputs,
+        }
+
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        collate_fn=collate_fn,
+        shuffle=False,
+    )
+    return dataloader
+
+
 def extract_activations(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
@@ -224,25 +255,11 @@ def extract_activations(
     )
 
     # Create dataloader
-    def collate_fn(samples):
-        inputs = tokenizer(
-            [sample["input"] for sample in samples],
-            padding=True,
-            return_tensors="pt",
-            add_special_tokens=not apply_chat_template,  # avoid adding second BOS token when applying chat template
-        )
-        return {
-            "ids": [sample["id"] for sample in samples],
-            "is_safe": [sample["is_safe"] for sample in samples],
-            "is_adversarial": [sample["is_adversarial"] for sample in samples],
-            **inputs,
-        }
-
-    dataloader = torch.utils.data.DataLoader(
+    dataloader = _create_dataloader(
         dataset,
+        tokenizer,
         batch_size=batch_size,
-        collate_fn=collate_fn,
-        shuffle=False,
+        add_special_tokens=not apply_chat_template,  # avoid adding second BOS token when applying chat template
     )
 
     # Extract activations
