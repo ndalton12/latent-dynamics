@@ -187,7 +187,7 @@ def plot_layerwise_pca(
                         x=activations_proj[:, 0],
                         y=activations_proj[:, 1],
                         mode="lines+markers",
-                        marker=dict(color=color, symbol=symbol, size=4),
+                        marker=dict(color=color, size=4, symbol=symbol),
                         line=dict(color=color, width=1.0),
                         opacity=alpha,
                         hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{text}",
@@ -197,6 +197,21 @@ def plot_layerwise_pca(
                     row=row,
                     col=col,
                 )
+
+                # Plot start and endpoint if there are multiple activations
+                if len(activations_proj) > 1:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[activations_proj[0, 0], activations_proj[-1, 0]],
+                            y=[activations_proj[0, 1], activations_proj[-1, 1]],
+                            mode="markers",
+                            marker=dict(color=color, size=6, symbol=["circle", "triangle-up"]),
+                            hoverinfo="skip",
+                            showlegend=False,
+                        ),
+                        row=row,
+                        col=col,
+                    )
 
             fig.update_xaxes(title_text="PC1", row=row, col=col)
             fig.update_yaxes(title_text="PC2", row=row, col=col)
