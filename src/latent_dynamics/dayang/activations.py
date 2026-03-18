@@ -40,32 +40,44 @@ def _pool(
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
 ) -> tuple[np.ndarray, list[str]]:
+    token_positions = list(range(len(tokens)))
+
+    # Exclude BOS and/or special tokens
     if exclude_bos:
         activations = activations[1:]
         tokens = tokens[1:]
+        token_positions = token_positions[1:]
     if exclude_special_tokens:
         exclude_special_tokens = SPECIAL_TOKENS if exclude_special_tokens is True else exclude_special_tokens
         mask = [t not in exclude_special_tokens for t in tokens]
         activations = activations[mask]
         tokens = [t for t, m in zip(tokens, mask) if m]
+        token_positions = [p for p, m in zip(token_positions, mask) if m]
 
-    if isinstance(pool_method, slice):
-        activations_pooled, tokens_pooled = activations[pool_method], tokens[pool_method]
-    elif pool_method == "first":
-        activations_pooled, tokens_pooled = activations[:1], tokens[:1]
+    # Convert pooling method to slices if possible
+    if pool_method == "first":
+        pool_method = slice(0, 1)
     elif pool_method == "mid":
         mid_idx = len(activations) // 2
-        activations_pooled, tokens_pooled = activations[mid_idx : mid_idx + 1], tokens[mid_idx : mid_idx + 1]
+        pool_method = slice(mid_idx, mid_idx + 1)
     elif pool_method == "last":
-        activations_pooled, tokens_pooled = activations[-1:], tokens[-1:]
+        pool_method = slice(-1, None)
+
+    # Pool activations
+    if isinstance(pool_method, slice):
+        activations = activations[pool_method]
+        tokens = tokens[pool_method]
+        token_positions = token_positions[pool_method]
     elif pool_method == "mean":
-        activations_pooled, tokens_pooled = activations.mean(axis=0, keepdims=True), ["mean"]
+        activations = activations.mean(axis=0, keepdims=True)
+        tokens = ["mean"]
+        token_positions = [None]
     elif pool_method == "all":
-        activations_pooled, tokens_pooled = activations, tokens
+        pass
     else:
         raise ValueError(f"Unknown pool_method: '{pool_method}'")
 
-    return activations_pooled, tokens_pooled
+    return activations, tokens, token_positions
 
 
 @dataclass
@@ -88,22 +100,23 @@ class Activations:
     def save(self, path: str | Path):
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
+        # Save metadata
         self.metadata.to_json(path / "metadata.json", orient="index", indent=2)
+        # Save activations
         for layer_idx, acts in tqdm(self.activations.items(), desc="Saving activations"):
             np.savez_compressed(path / f"layer_{layer_idx}.npz", **{str(k): v for k, v in acts.items()})
 
     @classmethod
     def load(cls, path: str | Path) -> "Activations":
+        # Load metadata
         path = Path(path)
         metadata = pd.read_json(path / "metadata.json", orient="index")
         metadata.index.name = "id"
-
+        # Load activations
         activations = {}
         for file in path.glob("layer_*.npz"):
             layer_idx = int(file.stem.split("_")[1])
-            npz_file = np.load(file)
-            activations[layer_idx] = npz_file
-
+            activations[layer_idx] = np.load(file)
         return cls(metadata=metadata, activations=activations)
 
     def get(
@@ -121,7 +134,7 @@ class Activations:
         if sample_id is not None and layer_idx is not None:
             metadata = self.metadata.loc[sample_id].to_dict()
             activations = self.activations[layer_idx][sample_id]
-            activations_pooled, tokens_pooled = _pool(
+            activations_pooled, tokens_pooled, token_positions = _pool(
                 activations,
                 metadata["tokens"],
                 pool_method,
@@ -133,6 +146,8 @@ class Activations:
                 **metadata,
                 "activations": activations_pooled,
                 "tokens": tokens_pooled,
+                "tokens_all": metadata["tokens"],
+                "token_positions": token_positions,
             }
         elif layer_idx is not None:
             results = []
@@ -299,9 +314,9 @@ def extract_activations(
 
     num_samples = len(metadata)
     num_tokens = sum(len(meta["tokens"]) for meta in metadata)
-    num_layers = len(layers)
+    num_layers = len(activations)
     hidden_size = acts.shape[1:]
-    num_bytes = sum(acts.nbytes for layer_idx in layers for acts in activations[layer_idx].values())
+    num_bytes = sum(acts.nbytes for acts_per_layer in activations.values() for acts in acts_per_layer.values())
     print(
         f"Extracted activations for {num_samples} samples"
         f"\n  Number of tokens:     {num_tokens}"
