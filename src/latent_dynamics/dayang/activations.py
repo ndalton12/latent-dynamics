@@ -36,23 +36,29 @@ SPECIAL_TOKENS = {
 def _pool(
     activations: np.ndarray,
     tokens: list[str],
-    pool_method: PoolMethod,
+    *arrays: list[Any] | np.ndarray,
+    pool_method: PoolMethod = "all",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
-) -> tuple[np.ndarray, list[str]]:
-    token_positions = list(range(len(tokens)))
+) -> tuple[np.ndarray, list[str], list[int | None]]:
+    tokens = np.asarray(tokens)
+    token_positions = np.arange(len(tokens))
+    arrays = [np.asarray(array) for array in arrays]
 
     # Exclude BOS and/or special tokens
     if exclude_bos:
         activations = activations[1:]
         tokens = tokens[1:]
         token_positions = token_positions[1:]
+        arrays = [array[1:] for array in arrays]
     if exclude_special_tokens:
         exclude_special_tokens = SPECIAL_TOKENS if exclude_special_tokens is True else exclude_special_tokens
         mask = [t not in exclude_special_tokens for t in tokens]
+
         activations = activations[mask]
-        tokens = [t for t, m in zip(tokens, mask) if m]
-        token_positions = [p for p, m in zip(token_positions, mask) if m]
+        tokens = tokens[mask]
+        token_positions = token_positions[mask]
+        arrays = [array[mask] for array in arrays]
 
     # Convert pooling method to slices if possible
     if pool_method == "first":
@@ -68,16 +74,18 @@ def _pool(
         activations = activations[pool_method]
         tokens = tokens[pool_method]
         token_positions = token_positions[pool_method]
+        arrays = [array[pool_method] for array in arrays]
     elif pool_method == "mean":
         activations = activations.mean(axis=0, keepdims=True)
         tokens = ["mean"]
         token_positions = [None]
+        arrays = [[None] for _ in arrays]
     elif pool_method == "all":
         pass
     else:
         raise ValueError(f"Unknown pool_method: '{pool_method}'")
 
-    return activations, tokens, token_positions
+    return activations, tokens.tolist(), token_positions.tolist(), *arrays
 
 
 @dataclass
@@ -103,8 +111,8 @@ class Activations:
         # Save metadata
         self.metadata.to_json(path / "metadata.json", orient="index", indent=2)
         # Save activations
-        for layer_idx, acts in tqdm(self.activations.items(), desc="Saving activations"):
-            np.savez_compressed(path / f"layer_{layer_idx}.npz", **{str(k): v for k, v in acts.items()})
+        for layer_idx, acts_per_layer in tqdm(self.activations.items(), desc="Saving activations"):
+            np.savez_compressed(path / f"layer_{layer_idx}.npz", **acts_per_layer)
 
     @classmethod
     def load(cls, path: str | Path) -> "Activations":
@@ -123,7 +131,7 @@ class Activations:
         self,
         sample_id: str = None,
         layer_idx: int | None = None,
-        pool_method: str | slice = "all",
+        pool_method: PoolMethod = "all",
         exclude_bos: bool = True,
         exclude_special_tokens: bool | list[str] = True,
     ) -> Any:
@@ -322,20 +330,22 @@ def extract_activations(
             )
             # Store activations
             for layer_idx in layers:
-                acts = outputs.hidden_states[layer_idx][i, mask]  # shape: (num_valid_tokens, hidden_size)
-                activations[layer_idx][sample_id] = acts.float().cpu().numpy()
+                acts_per_sample = outputs.hidden_states[layer_idx][i, mask]  # shape: (num_valid_tokens, hidden_size)
+                activations[layer_idx][sample_id] = acts_per_sample.float().cpu().numpy()
 
     num_samples = len(metadata)
     num_tokens = sum(len(meta["tokens"]) for meta in metadata)
     num_layers = len(activations)
-    hidden_size = acts.shape[1:]
-    num_bytes = sum(acts.nbytes for acts_per_layer in activations.values() for acts in acts_per_layer.values())
+    hidden_size = acts_per_sample.shape[1:]
+    num_bytes_acts = sum(
+        acts_per_layer.nbytes for acts_per_layer in activations.values() for acts_per_layer in acts_per_layer.values()
+    )
     print(
         f"Extracted activations for {num_samples} samples"
         f"\n  Number of tokens:     {num_tokens}"
         f"\n  Number of layers:     {num_layers}"
         f"\n  Shape of activations: {hidden_size}"
-        f"\n  Total size:           {num_bytes / 1024 / 1024:.1f} MB"
+        f"\n  Size of activations:  {num_bytes_acts / 1024 / 1024:.1f} MB"
     )
 
     metadata = pd.DataFrame(metadata).set_index("id")
