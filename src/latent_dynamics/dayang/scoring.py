@@ -13,6 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from tqdm.auto import tqdm
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod
+from latent_dynamics.dayang.projections import get_tooltip
 
 
 class Reader(ABC):
@@ -134,17 +135,6 @@ def plot_layerwise_score(
 
     fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
 
-    import html
-    import textwrap
-
-    def escape_tokens(tokens: list[str]) -> list[str]:
-        return [html.escape(token.replace("\n", "\\n")) for token in tokens]
-
-    def process_tokens(tokens: list[str], highlight: int | None = None) -> str:
-        tokens = ["<b>" + token + "</b>" if i == highlight else token for i, token in enumerate(tokens)]
-        text = " ".join(tokens)
-        return "<br>".join(textwrap.wrap(text, width=80))
-
     for i, (layer_idx, reader) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise scores"), readers)):
         row = (i // ncols) + 1
         col = (i % ncols) + 1
@@ -159,21 +149,10 @@ def plot_layerwise_score(
             # Predict scores using the reader
             scores = reader.predict(sample["activations"])
 
-            # Create text for tooltip
-            tokens = escape_tokens(sample["tokens"])
-            tokens_all = escape_tokens(sample["tokens_all"])
-            text = [
-                f"ID: {sample['id']}"
-                f"<br>Position: {i + 1}/{len(sample['tokens'])}"
-                f"<br>Token: '{token}'"
-                f"<br><extra>{process_tokens(tokens_all, highlight=token_pos)}</extra>"
-                for i, (token, token_pos) in enumerate(zip(tokens, sample["token_positions"]))
-            ]
-
+            # Plot the scores
             color = "green" if sample["is_safe"] else "red"
             symbol = "x" if sample["is_adversarial"] else "circle"
             alpha = 0.5 if sample["is_adversarial"] else 0.25
-
             fig.add_trace(
                 go.Scatter(
                     x=list(range(len(scores))),
@@ -183,7 +162,7 @@ def plot_layerwise_score(
                     line=dict(color=color, width=1.0),
                     opacity=alpha,
                     hovertemplate="Token Pos: %{x}<br>Score: %{y:.2f}<br>%{text}",
-                    text=text,
+                    text=get_tooltip(sample),
                     showlegend=False,
                 ),
                 row=row,

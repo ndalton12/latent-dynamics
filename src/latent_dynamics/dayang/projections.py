@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import math
+import textwrap
 from typing import Literal
 
 import matplotlib.pyplot as plt
@@ -11,6 +13,26 @@ from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod
+
+
+def tokens_to_text(tokens: list[str], highlight: int | None = None) -> str:
+    tokens = ["<b>" + token + "</b>" if i == highlight else token for i, token in enumerate(tokens)]
+    text = " ".join(tokens)
+    return "<br>".join(textwrap.wrap(text, width=80))
+
+
+def get_tooltip(sample: dict) -> list[str]:
+    """Create tooltip text for a given sample."""
+    tokens = [html.escape(token.replace("\n", "\\n")) for token in sample["tokens"]]
+    tokens_all = [html.escape(token.replace("\n", "\\n")) for token in sample["tokens_all"]]
+    text = [
+        f"ID: {sample['id']}"
+        f"<br>Position: {i + 1}/{len(sample['tokens'])}"
+        f"<br>Token: '{token}'"
+        f"<br><extra>{tokens_to_text(tokens_all, highlight=token_pos)}</extra>"
+        for i, (token, token_pos) in enumerate(zip(tokens, sample["token_positions"]))
+    ]
+    return text
 
 
 def compute_layerwise_pca(
@@ -142,17 +164,6 @@ def plot_layerwise_pca(
     elif backend == "plotly":
         fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
 
-        import html
-        import textwrap
-
-        def escape_tokens(tokens: list[str]) -> list[str]:
-            return [html.escape(token.replace("\n", "\\n")) for token in tokens]
-
-        def process_tokens(tokens: list[str], highlight: int | None = None) -> str:
-            tokens = ["<b>" + token + "</b>" if i == highlight else token for i, token in enumerate(tokens)]
-            text = " ".join(tokens)
-            return "<br>".join(textwrap.wrap(text, width=80))
-
         for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise PCA"), pcas)):
             row = (i // ncols) + 1
             col = (i % ncols) + 1
@@ -167,17 +178,6 @@ def plot_layerwise_pca(
                 # Project pooled activations onto the first 2 PCs
                 activations_proj = pca.transform(sample["activations"])
 
-                # Create text for tooltip
-                tokens = escape_tokens(sample["tokens"])
-                tokens_all = escape_tokens(sample["tokens_all"])
-                text = [
-                    f"ID: {sample['id']}"
-                    f"<br>Position: {i + 1}/{len(sample['tokens'])}"
-                    f"<br>Token: '{token}'"
-                    f"<br><extra>{process_tokens(tokens_all, highlight=token_pos)}</extra>"
-                    for i, (token, token_pos) in enumerate(zip(tokens, sample["token_positions"]))
-                ]
-
                 # Plot the activations in the PCA space
                 color = "green" if sample["is_safe"] else "red"
                 symbol = "x" if sample["is_adversarial"] else "circle"
@@ -191,7 +191,7 @@ def plot_layerwise_pca(
                         line=dict(color=color, width=1.0),
                         opacity=alpha,
                         hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{text}",
-                        text=text,
+                        text=get_tooltip(sample),
                         showlegend=False,
                     ),
                     row=row,
