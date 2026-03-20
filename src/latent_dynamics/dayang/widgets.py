@@ -39,8 +39,17 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         self.w_dataset = widgets.Dropdown(options=datasets, value=dataset, description="Dataset")
         self.w_max_samples = widgets.IntText(value=max_samples, min=1, description="Max samples:")
         self.w_include_response = widgets.Dropdown(
-            options=[False, True, "Sorry", "Sure"], value=include_response, description="Include response"
+            options=[
+                ("none", False),
+                ("dataset", True),
+                ('"Sorry"', "Sorry"),
+                ('"Sure"', "Sure"),
+                ("custom", "custom"),
+            ],
+            value=include_response,
+            description="Response",
         )
+        self.w_custom_response = widgets.Text(value="", description="Custom")
         self.w_apply_chat_template = widgets.Checkbox(value=apply_chat_template, description="Apply chat template")
         self.btn_extract = widgets.Button(description="Extract Activations", button_style="primary")
         col_extract = widgets.VBox(
@@ -49,6 +58,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
                 self.w_dataset,
                 self.w_max_samples,
                 self.w_include_response,
+                self.w_custom_response,
                 self.w_apply_chat_template,
                 self.btn_extract,
             ]
@@ -68,16 +78,25 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         super().__init__(children=[widgets.HBox([col_extract, col_load]), self.out])
 
         # Register handlers
-        self.btn_extract.on_click(self.do_extract)
-        self.btn_save.on_click(self.do_save)
-        self.btn_load.on_click(self.do_load)
+        self.w_include_response.observe(self._update_custom_response, names="value")
+        self._update_custom_response()
+
+        self.btn_extract.on_click(self._do_extract)
+        self.btn_save.on_click(self._do_save)
+        self.btn_load.on_click(self._do_load)
 
     def _update_value(self, activations: Activations | None):
         self.activations = activations
         self.value = not self.value
 
+    def _update_custom_response(self, *args):
+        if self.w_include_response.value == "custom":
+            self.w_custom_response.layout.display = None  # show the widget
+        else:
+            self.w_custom_response.layout.display = "none"  # hide the widget
+
     @contextlib.contextmanager
-    def update_buttons(self):
+    def _update_buttons(self):
         self.btn_extract.disabled = True
         self.btn_save.disabled = True
         self.btn_load.disabled = True
@@ -88,20 +107,19 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             self.btn_save.disabled = self.activations is None
             self.btn_load.disabled = False
 
-    def do_extract(self, *args):
-        with self.update_buttons(), self.out:
+    def _do_extract(self, *args):
+        with self._update_buttons(), self.out:
             self.out.clear_output(wait=True)
 
             # Extract activations
-            max_samples = self.w_max_samples.value if self.w_max_samples.value > 0 else None
-            model, tokenizer = load_model_and_tokenizer(self.w_model.value)
-            dataset = load_dataset_from_spec(self.w_dataset.value, max_samples=max_samples)
+            model, tokenizer = load_model_and_tokenizer(self.model)
+            dataset = load_dataset_from_spec(self.dataset, max_samples=self.max_samples)
             activations = extract_activations(
                 model,
                 tokenizer,
                 dataset,
-                include_response=self.w_include_response.value,
-                apply_chat_template=self.w_apply_chat_template.value,
+                include_response=self.include_response,
+                apply_chat_template=self.apply_chat_template,
             )
 
             # Update state
@@ -109,19 +127,18 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
             # Update path with default path
             dataset_name = self.w_dataset.value.replace("/", "_")
-            if max_samples is not None:
-                dataset_name += f"-{max_samples}"
+            if self.max_samples is not None:
+                dataset_name += f"-{self.max_samples}"
             self.w_path.value = str(self.search_path / dataset_name / self.w_model.value)
 
-    def do_load(self, *args):
-        path = self.w_path.value
-        if not path:
+    def _do_load(self, *args):
+        if not self.path:
             return
 
-        with self.update_buttons(), self.out:
+        with self._update_buttons(), self.out:
             self.out.clear_output(wait=True)
 
-            path = Path(path)
+            path = Path(self.path)
             if not path.exists():
                 print(f"Path '{path}' does not exist. Please choose a valid path.")
                 return
@@ -133,15 +150,14 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             # Update state
             self._update_value(activations)
 
-    def do_save(self, *args):
-        path = self.w_path.value
-        if not path or self.activations is None:
+    def _do_save(self, *args):
+        if not self.path or self.activations is None:
             return
 
-        with self.update_buttons(), self.out:
+        with self._update_buttons(), self.out:
             self.out.clear_output(wait=True)
 
-            path = Path(path)
+            path = Path(self.path)
             if path.exists():
                 print(f"Path '{path}' already exists. Please choose a different path.")
                 return
@@ -152,6 +168,36 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
             # Update load options
             self.w_path.options = get_activation_folders(self.search_path)
+
+    @property
+    def model(self) -> str:
+        return self.w_model.value
+
+    @property
+    def dataset(self) -> str:
+        return self.w_dataset.value
+
+    @property
+    def max_samples(self) -> int | None:
+        if self.w_max_samples.value > 0:
+            return self.w_max_samples.value
+        else:
+            return None
+
+    @property
+    def include_response(self) -> bool | str:
+        if self.w_include_response.value == "Custom":
+            return self.w_custom_response.value
+        else:
+            return self.w_include_response.value
+
+    @property
+    def apply_chat_template(self) -> bool:
+        return self.w_apply_chat_template.value
+
+    @property
+    def path(self) -> str:
+        return self.w_path.value
 
 
 class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
@@ -186,8 +232,8 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         )
 
         # Register handlers
-        self.w_pool.observe(self.update_pool_slice, names="value")
-        self.update_pool_slice()
+        self.w_pool.observe(self._update_pool_slice, names="value")
+        self._update_pool_slice()
 
         self.w_exclude_special.observe(self._update_value, names="value")
         for w in [
@@ -203,7 +249,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
     def _update_value(self, *args):
         self.value = not self.value
 
-    def update_pool_slice(self, *args):
+    def _update_pool_slice(self, *args):
         if self.w_pool.value == "slice":
             self.w_pool_slice.layout.display = None  # show the widget
         else:
