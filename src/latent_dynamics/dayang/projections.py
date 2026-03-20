@@ -15,22 +15,33 @@ from tqdm.auto import tqdm
 from latent_dynamics.dayang.activations import Activations, PoolMethod
 
 
+def escape_token(token: str) -> str:
+    token = html.escape(token)
+    token = token if token.isprintable() else ascii(token)[1:-1]
+    return token
+
+
 def tokens_to_text(tokens: list[str], highlight: int | None = None) -> str:
-    tokens = ["<b>" + token + "</b>" if i == highlight else token for i, token in enumerate(tokens)]
+    tokens = ["<b>" + escape_token(t) + "</b>" if i == highlight else t for i, t in enumerate(tokens)]
     text = " ".join(tokens)
     return "<br>".join(textwrap.wrap(text, width=80))
 
 
-def get_tooltip(sample: dict) -> list[str]:
+def topk_to_text(topk_tokens: list[str], topk_probs: list[float]) -> str:
+    return ", ".join(f"'{escape_token(t)}' ({p:.2f})" for t, p in zip(topk_tokens, topk_probs))
+
+
+def get_tooltip(sample: dict, topk: int = 3) -> list[str]:
     """Create tooltip text for a given sample."""
-    tokens = [html.escape(token.replace("\n", "\\n")) for token in sample["tokens"]]
-    tokens_all = [html.escape(token.replace("\n", "\\n")) for token in sample["tokens_all"]]
     text = [
         f"ID: {sample['id']}"
         f"<br>Position: {i + 1}/{len(sample['tokens'])}"
-        f"<br>Token: '{token}'"
-        f"<br><extra>{tokens_to_text(tokens_all, highlight=token_pos)}</extra>"
-        for i, (token, token_pos) in enumerate(zip(tokens, sample["token_positions"]))
+        f"<br>Token: '{escape_token(token)}'"
+        f"<br>Top-k: {topk_to_text(topk_tokens[:topk], topk_probs[:topk]) if topk_tokens is not None else 'N/A'}"
+        f"<br><extra>{tokens_to_text(sample['tokens_all'], highlight=token_pos)}</extra>"
+        for i, (token, token_pos, topk_tokens, topk_probs) in enumerate(
+            zip(sample["tokens"], sample["token_positions"], sample["topk_tokens"], sample["topk_probs"])
+        )
     ]
     return text
 

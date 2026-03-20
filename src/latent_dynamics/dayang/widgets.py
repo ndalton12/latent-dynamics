@@ -42,17 +42,17 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             options=[
                 ("none", False),
                 ("dataset", True),
+                ("custom", "custom"),
                 ('"Sorry"', "Sorry"),
                 ('"Sure"', "Sure"),
-                ("custom", "custom"),
             ],
             value=include_response,
             description="Response",
         )
         self.w_custom_response = widgets.Text(value="", description="Custom")
         self.w_apply_chat_template = widgets.Checkbox(value=apply_chat_template, description="Apply chat template")
-        self.btn_extract = widgets.Button(description="Extract Activations", button_style="primary")
-        col_extract = widgets.VBox(
+        self.btn_extract_activations = widgets.Button(description="Extract Activations", button_style="primary")
+        col_extract_activations = widgets.VBox(
             [
                 self.w_model,
                 self.w_dataset,
@@ -60,9 +60,15 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
                 self.w_include_response,
                 self.w_custom_response,
                 self.w_apply_chat_template,
-                self.btn_extract,
+                self.btn_extract_activations,
             ]
         )
+
+        self.w_topk_model = widgets.Dropdown(options=models, value=model, description="Model")
+        self.w_topk_layer = widgets.SelectMultiple(description="Layers")
+        self.w_topk_k = widgets.IntText(value=10, min=1, description="k")
+        self.btn_extract_topk = widgets.Button(description="Extract Top-k", button_style="primary", disabled=True)
+        col_extract_topk = widgets.VBox([self.w_topk_model, self.w_topk_layer, self.w_topk_k, self.btn_extract_topk])
 
         self.w_path = widgets.Combobox(options=get_activation_folders(self.search_path), description="Path")
         self.btn_load = widgets.Button(description="Load Activations", button_style="primary")
@@ -75,19 +81,28 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         )
 
         self.out = widgets.Output()
-        super().__init__(children=[widgets.HBox([col_extract, col_load]), self.out])
+        super().__init__(children=[widgets.HBox([col_extract_activations, col_extract_topk, col_load]), self.out])
 
         # Register handlers
         self.w_include_response.observe(self._update_custom_response, names="value")
         self._update_custom_response()
 
-        self.btn_extract.on_click(self._do_extract)
+        self.btn_extract_activations.on_click(self._do_extract_activations)
         self.btn_save.on_click(self._do_save)
         self.btn_load.on_click(self._do_load)
+        self.btn_extract_topk.on_click(self._do_extract_topk)
 
     def _update_value(self, activations: Activations | None):
         self.activations = activations
         self.value = not self.value
+
+        # Update topk layer options
+        if activations is not None:
+            self.w_topk_layer.options = activations.layers
+            self.w_topk_layer.value = ()
+        else:
+            self.w_topk_layer.options = []
+            self.w_topk_layer.value = ()
 
     def _update_custom_response(self, *args):
         if self.w_include_response.value == "custom":
@@ -97,17 +112,19 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
     @contextlib.contextmanager
     def _update_buttons(self):
-        self.btn_extract.disabled = True
+        self.btn_extract_activations.disabled = True
         self.btn_save.disabled = True
         self.btn_load.disabled = True
+        self.btn_extract_topk.disabled = True
         try:
             yield
         finally:
-            self.btn_extract.disabled = False
+            self.btn_extract_activations.disabled = False
             self.btn_save.disabled = self.activations is None
             self.btn_load.disabled = False
+            self.btn_extract_topk.disabled = self.activations is None
 
-    def _do_extract(self, *args):
+    def _do_extract_activations(self, *args):
         with self._update_buttons(), self.out:
             self.out.clear_output(wait=True)
 
@@ -168,6 +185,18 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
             # Update load options
             self.w_path.options = get_activation_folders(self.search_path)
+
+    def _do_extract_topk(self, *args):
+        if self.activations is None:
+            return
+
+        with self._update_buttons(), self.out:
+            self.out.clear_output(wait=True)
+
+            # Extract topk tokens
+            model, tokenizer = load_model_and_tokenizer(self.w_topk_model.value)
+            for layer_idx in self.w_topk_layer.value:
+                self.activations.extract_topk(model, tokenizer, layer_idx=layer_idx, k=self.w_topk_k.value)
 
     @property
     def model(self) -> str:
