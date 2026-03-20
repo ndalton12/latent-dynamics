@@ -15,7 +15,7 @@ def _str_to_slice(s: str) -> slice | None:
 
 
 def get_activation_folders(path: Path):
-    return sorted((str(p) for p in path.glob("**/*") if (p / "metadata.json").exists()), key=natsort_keygen())
+    return sorted((str(p) for p in path.glob("**/*") if (p / "samples.json").exists()), key=natsort_keygen())
 
 
 class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
@@ -285,8 +285,8 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
             self.w_pool_slice.layout.display = "none"  # hide the widget
 
     def set_activations(self, activations: Activations):
-        samples_safe = activations.metadata[activations.metadata["is_safe"]].index.tolist()
-        samples_unsafe = activations.metadata[~activations.metadata["is_safe"]].index.tolist()
+        samples_safe = activations.samples[activations.samples["is_safe"]].index.tolist()
+        samples_unsafe = activations.samples[~activations.samples["is_safe"]].index.tolist()
         self.w_safe.options = samples_safe
         self.w_unsafe.options = samples_unsafe
         self.w_safe.value = ()

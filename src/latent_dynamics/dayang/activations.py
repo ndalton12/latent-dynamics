@@ -99,13 +99,13 @@ def _topk(logits: torch.Tensor, tokenizer: PreTrainedTokenizerBase, k: int = 10)
 
 @dataclass
 class Activations:
-    metadata: pd.DataFrame
+    samples: pd.DataFrame
     activations: dict[int, dict[str, np.ndarray]]  # layer_idx -> sample_id -> activations
     topk: dict[int, dict[str, dict] | None] = field(default_factory=dict)  # layer_idx -> sample_id -> topk
 
     @property
     def num_samples(self) -> int:
-        return len(self.metadata)
+        return len(self.samples)
 
     @property
     def num_layers(self) -> int:
@@ -118,8 +118,8 @@ class Activations:
     def save(self, path: str | Path):
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        # Save metadata
-        self.metadata.to_json(path / "metadata.json", orient="index", indent=2)
+        # Save samples
+        self.samples.to_json(path / "samples.json", orient="index", indent=2)
         # Save activations
         for layer_idx, acts_per_layer in tqdm(self.activations.items(), desc="Saving activations"):
             np.savez_compressed(path / f"layer_{layer_idx}.npz", **acts_per_layer)
@@ -128,10 +128,10 @@ class Activations:
 
     @classmethod
     def load(cls, path: str | Path) -> "Activations":
-        # Load metadata
+        # Load samples
         path = Path(path)
-        metadata = pd.read_json(path / "metadata.json", orient="index")
-        metadata.index.name = "id"
+        samples = pd.read_json(path / "samples.json", orient="index")
+        samples.index.name = "id"
         # Load activations
         activations = {}
         for file in path.glob("layer_*.npz"):
@@ -139,7 +139,7 @@ class Activations:
             activations[layer_idx] = np.load(file)
         # Load topk
         topk = pd.read_json(path / "topk.json", orient="columns").to_dict()
-        return cls(metadata=metadata, activations=activations, topk=topk)
+        return cls(samples=samples, activations=activations, topk=topk)
 
     def extract_topk(
         self,
@@ -156,7 +156,7 @@ class Activations:
             raise ValueError("Model does not have an lm_head to compute logits")
 
         self.topk[layer_idx] = {}
-        for sample_id in tqdm(self.metadata.index, desc=f"Extracting top-{k} tokens"):
+        for sample_id in tqdm(self.samples.index, desc=f"Extracting top-{k} tokens"):
             # Compute logits from the activations of the specified layer
             acts_per_sample = self.activations[layer_idx][sample_id]
             acts_per_sample = torch.tensor(acts_per_sample, dtype=model.dtype).to(model.device)
@@ -191,7 +191,7 @@ class Activations:
             if layer_idx in self.topk:
                 activations, tokens, token_positions, topk_tokens, topk_probs = _pool(
                     self.activations[layer_idx][sample_id],
-                    self.metadata.loc[sample_id, "tokens"],
+                    self.samples.loc[sample_id, "tokens"],
                     self.topk[layer_idx][sample_id]["tokens"],
                     self.topk[layer_idx][sample_id]["probs"],
                     pool_method=pool_method,
@@ -201,7 +201,7 @@ class Activations:
             else:
                 activations, tokens, token_positions = _pool(
                     self.activations[layer_idx][sample_id],
-                    self.metadata.loc[sample_id, "tokens"],
+                    self.samples.loc[sample_id, "tokens"],
                     pool_method=pool_method,
                     exclude_bos=exclude_bos,
                     exclude_special_tokens=exclude_special_tokens,
@@ -210,8 +210,8 @@ class Activations:
                 topk_probs = [None] * len(tokens)
             return {
                 "id": sample_id,
-                **self.metadata.loc[sample_id].to_dict(),
-                "tokens_all": self.metadata.loc[sample_id, "tokens"],
+                **self.samples.loc[sample_id].to_dict(),
+                "tokens_all": self.samples.loc[sample_id, "tokens"],
                 "activations": activations,
                 "tokens": tokens,
                 "token_positions": token_positions,
@@ -220,7 +220,7 @@ class Activations:
             }
         elif layer_idx is not None:
             results = []
-            for sample_id in self.metadata.index:
+            for sample_id in self.samples.index:
                 results.append(
                     self.get(
                         sample_id=sample_id,
@@ -237,10 +237,10 @@ class Activations:
     def select(self, sample_ids: list[str]) -> "Activations":
         """Return a new Activations object containing only the specified samples.
 
-        This method only creates a subset of the metadata, while the activations dictionary is kept as a reference
+        This method only creates a subset of the samples, while the activations dictionary is kept as a reference
         to save memory.
         """
-        return Activations(metadata=self.metadata.loc[sample_ids], activations=self.activations, topk=self.topk)
+        return Activations(samples=self.samples.loc[sample_ids], activations=self.activations, topk=self.topk)
 
 
 def _prepare_sample(
@@ -363,7 +363,7 @@ def extract_activations(
     )
 
     # Extract activations
-    metadata = []
+    samples = []
     activations = {layer_idx: {} for layer_idx in layers}
     topk = {last_layer_idx: {}}
     for batch in tqdm(dataloader, desc="Extracting activations"):
@@ -381,10 +381,10 @@ def extract_activations(
         for i, sample_id in enumerate(batch["ids"]):
             # Get mask to remove padding
             mask = attention_mask[i].bool()
-            # Store metadata
+            # Store samples
             tokens = tokenizer.convert_ids_to_tokens(input_ids[i, mask])
             text = tokenizer.convert_tokens_to_string(tokens)
-            metadata.append(
+            samples.append(
                 {
                     "id": sample_id,
                     "text": text,
@@ -401,8 +401,8 @@ def extract_activations(
             topk_tokens, topk_probs = _topk(outputs.logits[i, mask], tokenizer, k=k)
             topk[last_layer_idx][sample_id] = {"tokens": topk_tokens, "probs": topk_probs}
 
-    num_samples = len(metadata)
-    num_tokens = sum(len(meta["tokens"]) for meta in metadata)
+    num_samples = len(samples)
+    num_tokens = sum(len(sample["tokens"]) for sample in samples)
     num_layers = len(activations)
     hidden_size = acts_per_sample.shape[1:]
     num_bytes_acts = sum(
@@ -422,6 +422,6 @@ def extract_activations(
         f"\n  Size of topk tokens: {num_bytes_topk / 1024 / 1024:.1f} MB"
     )
 
-    metadata = pd.DataFrame(metadata).set_index("id")
-    metadata.sort_index(inplace=True, key=natsort_keygen())
-    return Activations(metadata=metadata, activations=activations, topk=topk)
+    samples = pd.DataFrame(samples).set_index("id")
+    samples.sort_index(inplace=True, key=natsort_keygen())
+    return Activations(samples=samples, activations=activations, topk=topk)
