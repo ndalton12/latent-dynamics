@@ -162,7 +162,7 @@ def plot_layerwise_score(
                     line=dict(color=color, width=1.0),
                     opacity=alpha,
                     hovertemplate="Token Pos: %{x}<br>Score: %{y:.2f}<br>%{text}",
-                    text=get_tooltip(sample),
+                    text=get_tooltip(sample, html=True),
                     showlegend=False,
                 ),
                 row=row,

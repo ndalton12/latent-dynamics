@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import html
+import html as _html
 import math
 import textwrap
 from typing import Literal
@@ -15,34 +15,36 @@ from tqdm.auto import tqdm
 from latent_dynamics.dayang.activations import Activations, PoolMethod
 
 
-def escape_token(token: str) -> str:
-    token = html.escape(token)
+def escape_token(token: str, html: bool = False) -> str:
+    if html:
+        token = _html.escape(token)
     token = token if token.isprintable() else ascii(token)[1:-1]
     return token
 
 
-def tokens_to_text(tokens: list[str], highlight: int | None = None) -> str:
-    tokens = ["<b>" + escape_token(t) + "</b>" if i == highlight else t for i, t in enumerate(tokens)]
+def tokens_to_text(tokens: list[str], highlight: int | None = None, html: bool = False) -> str:
+    tokens = ["<b>" + escape_token(t, html=html) + "</b>" if i == highlight else t for i, t in enumerate(tokens)]
     text = " ".join(tokens)
     return "<br>".join(textwrap.wrap(text, width=80))
 
 
-def topk_to_text(topk_tokens: list[str], topk_probs: list[float]) -> str:
-    return ", ".join(f"'{escape_token(t)}' ({p:.2f})" for t, p in zip(topk_tokens, topk_probs))
+def topk_to_text(topk_tokens: list[str], topk_probs: list[float], html: bool = False) -> str:
+    return ", ".join(f"'{escape_token(t, html=html)}' ({p:.2f})" for t, p in zip(topk_tokens, topk_probs))
 
 
-def get_tooltip(sample: dict, topk: int = 3) -> list[str]:
+def get_tooltip(sample: dict, topk: int = 3, html: bool = False) -> list[str]:
     """Create tooltip text for a given sample."""
-    text = [
-        f"ID: {sample['id']}"
-        f"<br>Position: {i + 1}/{len(sample['tokens'])}"
-        f"<br>Token: '{escape_token(token)}'"
-        f"<br>Top-k: {topk_to_text(topk_tokens[:topk], topk_probs[:topk]) if topk_tokens is not None else 'N/A'}"
-        f"<br><extra>{tokens_to_text(sample['tokens_all'], highlight=token_pos)}</extra>"
-        for i, (token, token_pos, topk_tokens, topk_probs) in enumerate(
-            zip(sample["tokens"], sample["token_positions"], sample["topk_tokens"], sample["topk_probs"])
+    text = []
+    for i, (token, token_pos, topk_tokens, topk_probs) in enumerate(
+        zip(sample["tokens"], sample["token_positions"], sample["topk_tokens"], sample["topk_probs"])
+    ):
+        text.append(
+            f"ID: {sample['id']}"
+            f"<br>Position: {i + 1}/{len(sample['tokens'])}"
+            f"<br>Token: '{escape_token(token, html=html)}'"
+            f"<br>Top-k: {topk_to_text(topk_tokens[:topk], topk_probs[:topk], html=html) if topk_tokens is not None else 'N/A'}"
+            f"<br><extra>{tokens_to_text(sample['tokens_all'], highlight=token_pos, html=html)}</extra>"
         )
-    ]
     return text
 
 
@@ -202,7 +204,7 @@ def plot_layerwise_pca(
                         line=dict(color=color, width=1.0),
                         opacity=alpha,
                         hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{text}",
-                        text=get_tooltip(sample),
+                        text=get_tooltip(sample, html=True),
                         showlegend=False,
                     ),
                     row=row,
