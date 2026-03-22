@@ -12,7 +12,7 @@ from natsort import natsort_keygen
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 
-PoolMethod = Literal["all", "first", "mid", "last", "mean"] | slice
+PoolMethod = Literal["all", "first", "mid", "last", "mean"] | int | slice | list[int]
 
 SPECIAL_TOKENS = {
     # Gemma3
@@ -34,13 +34,14 @@ SPECIAL_TOKENS = {
 
 
 def _pool(
-    activations: np.ndarray,
-    tokens: list[str],
+    activations: list[Any] | np.ndarray,
+    tokens: list[str] | np.ndarray,
     *arrays: list[Any] | np.ndarray,
     pool_method: PoolMethod = "all",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
 ) -> tuple[np.ndarray, list[str], list[int | None]]:
+    activations = np.asarray(activations)
     tokens = np.asarray(tokens)
     token_positions = np.arange(len(tokens))
     arrays = [np.asarray(array) for array in arrays]
@@ -68,9 +69,11 @@ def _pool(
         pool_method = slice(mid_idx, mid_idx + 1)
     elif pool_method == "last":
         pool_method = slice(-1, None)
+    elif isinstance(pool_method, int):
+        pool_method = [pool_method]
 
     # Pool activations
-    if isinstance(pool_method, slice):
+    if isinstance(pool_method, (slice | list)):
         activations = activations[pool_method]
         tokens = tokens[pool_method]
         token_positions = token_positions[pool_method]
