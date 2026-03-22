@@ -92,7 +92,7 @@ def compute_layerwise_score(
 
     for layer_idx in tqdm(activations.layers, desc="Training layer-wise reader"):
         # Aggregate activations and labels across all samples for the current layer
-        samples = activations.get(
+        samples = activations.get_per_layer(
             layer_idx=layer_idx,
             pool_method=pool_method,
             exclude_bos=exclude_bos,
@@ -139,7 +139,7 @@ def plot_layerwise_score(
         row = (i // ncols) + 1
         col = (i % ncols) + 1
 
-        samples = activations.get(
+        samples = activations.get_per_layer(
             layer_idx=layer_idx,
             pool_method=pool_method,
             exclude_bos=exclude_bos,

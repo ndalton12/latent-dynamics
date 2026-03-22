@@ -61,7 +61,7 @@ def compute_layerwise_pca(
 
     for layer_idx in tqdm(activations.layers, desc="Computing layer-wise PCA"):
         # Aggregate activations across all samples for the current layer
-        samples = activations.get(
+        samples = activations.get_per_layer(
             layer_idx=layer_idx,
             pool_method=pool_method,
             exclude_bos=exclude_bos,
@@ -114,7 +114,7 @@ def plot_layerwise_pca(
         for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise PCA"), pcas)):
             ax = axes[i]
 
-            samples = activations.get(
+            samples = activations.get_per_layer(
                 layer_idx=layer_idx,
                 pool_method=pool_method,
                 exclude_bos=exclude_bos,
@@ -181,7 +181,7 @@ def plot_layerwise_pca(
             row = (i // ncols) + 1
             col = (i % ncols) + 1
 
-            samples = activations.get(
+            samples = activations.get_per_layer(
                 layer_idx=layer_idx,
                 pool_method=pool_method,
                 exclude_bos=exclude_bos,

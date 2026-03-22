@@ -177,23 +177,22 @@ class Activations:
             f"\n  Size of topk tokens: {num_bytes / 1024 / 1024:.1f} MB"
         )
 
-    def get(
+    def get_per_layer(
         self,
-        sample_id: str = None,
-        layer_idx: int | None = None,
+        layer_idx: int,
+        sample_id: str | None = None,
         pool_method: PoolMethod = "all",
         exclude_bos: bool = True,
         exclude_special_tokens: bool | list[str] = True,
     ) -> Any:
-        """
-        If `sample_id` and `layer_idx` are provided, returns a pooled dictionary for that sample.
-        If only `layer_idx` is provided, returns a list of pooled dictionaries for all samples in that layer.
-        """
-        if sample_id is not None and layer_idx is not None:
+        """Get activations for the specified layer over the pooled tokens."""
+        if sample_id is not None:
+            metadata = self.samples.loc[sample_id]
+            activations = self.activations[layer_idx][sample_id]  # shape: (num_tokens, hidden_size)
             if layer_idx in self.topk:
                 activations, tokens, token_positions, topk_tokens, topk_probs = _pool(
-                    self.activations[layer_idx][sample_id],
-                    self.samples.loc[sample_id, "tokens"],
+                    activations,
+                    metadata["tokens"],
                     self.topk[layer_idx][sample_id]["tokens"],
                     self.topk[layer_idx][sample_id]["probs"],
                     pool_method=pool_method,
@@ -202,39 +201,77 @@ class Activations:
                 )
             else:
                 activations, tokens, token_positions = _pool(
-                    self.activations[layer_idx][sample_id],
-                    self.samples.loc[sample_id, "tokens"],
+                    activations,
+                    metadata["tokens"],
                     pool_method=pool_method,
                     exclude_bos=exclude_bos,
                     exclude_special_tokens=exclude_special_tokens,
                 )
                 topk_tokens = [None] * len(tokens)
                 topk_probs = [None] * len(tokens)
+            metadata["tokens_all"] = metadata.pop("tokens")  # rename since key used for pooled tokens
             return {
                 "id": sample_id,
-                **self.samples.loc[sample_id].to_dict(),
-                "tokens_all": self.samples.loc[sample_id, "tokens"],
-                "activations": activations,
+                **metadata.to_dict(),
+                "activations": activations,  # shape: (num_pooled_tokens, hidden_size)
                 "tokens": tokens,
                 "token_positions": token_positions,
                 "topk_tokens": topk_tokens,
                 "topk_probs": topk_probs,
             }
-        elif layer_idx is not None:
-            results = []
-            for sample_id in self.samples.index:
-                results.append(
-                    self.get(
-                        sample_id=sample_id,
-                        layer_idx=layer_idx,
-                        pool_method=pool_method,
-                        exclude_bos=exclude_bos,
-                        exclude_special_tokens=exclude_special_tokens,
-                    )
-                )
-            return results
         else:
-            raise ValueError("Must provide at least layer_idx")
+            return [
+                self.get_per_layer(
+                    sample_id=sample_id,
+                    layer_idx=layer_idx,
+                    pool_method=pool_method,
+                    exclude_bos=exclude_bos,
+                    exclude_special_tokens=exclude_special_tokens,
+                )
+                for sample_id in self.samples.index
+            ]
+
+    def get_per_token(
+        self,
+        sample_id: str | None = None,
+        pool_method: PoolMethod = "all",
+        exclude_bos: bool = True,
+        exclude_special_tokens: bool | list[str] = True,
+    ) -> Any:
+        """Get activations for the pooled tokens over all layers."""
+        if sample_id is not None:
+            metadata = self.samples.loc[sample_id]
+            activations = np.stack(
+                [self.activations[layer_idx][sample_id] for layer_idx in self.layers], axis=1
+            )  # shape: (num_tokens, num_layers, hidden_size)
+            activations, tokens, token_positions = _pool(
+                activations,
+                metadata["tokens"],
+                pool_method=pool_method,
+                exclude_bos=exclude_bos,
+                exclude_special_tokens=exclude_special_tokens,
+            )
+            # TODO pool topk
+            metadata["tokens_all"] = metadata.pop("tokens")  # rename since key used for pooled tokens
+            return {
+                "id": sample_id,
+                **metadata.to_dict(),
+                "activations": activations,  # shape: (num_pooled_tokens, num_layers, hidden_size)
+                "tokens": tokens,
+                "token_positions": token_positions,
+                # "topk_tokens": topk_tokens,
+                # "topk_probs": topk_probs,
+            }
+        else:
+            return [
+                self.get_per_token(
+                    sample_id=sample_id,
+                    pool_method=pool_method,
+                    exclude_bos=exclude_bos,
+                    exclude_special_tokens=exclude_special_tokens,
+                )
+                for sample_id in self.samples.index
+            ]
 
     def select(self, sample_ids: list[str]) -> "Activations":
         """Return a new Activations object containing only the specified samples.
