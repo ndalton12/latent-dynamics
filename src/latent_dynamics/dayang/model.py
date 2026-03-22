@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import pandas as pd
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from IPython.display import display
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 
 @dataclass
@@ -57,7 +59,7 @@ def get_torch_dtype(dtype: torch.dtype | str | None) -> torch.dtype | str | None
 def load_model_and_tokenizer(
     model_spec: ModelSpec | str,
     device: str | None = None,
-) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
+) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
     """Load model and tokenizer from a ModelSpec."""
     if isinstance(model_spec, str):
         model_spec = MODEL_REGISTRY[model_spec]
@@ -86,3 +88,31 @@ def load_model_and_tokenizer(
         f"\n  Device:                          {model.device}"
     )
     return model, tokenizer
+
+
+def get_token_groups(tokenizer: PreTrainedTokenizerBase) -> dict[str, list[int]]:
+    tokenizer_id = f"{tokenizer.__class__.__name__}_{len(tokenizer)}"
+    if tokenizer_id == "GemmaTokenizer_262145":
+        return {
+            "unused": list(range(6, 105)) + list(range(256001, 262144)),
+            "common": list(range(494, 255968)),
+            "whitespace": list(range(107, 168)) + list(range(255968, 255999)),
+            "bytes": list(range(238, 494)),
+            "html": list(range(168, 238)),
+            "special": list(range(0, 6)) + [105, 106] + [255999, 256000],
+        }
+    else:
+        raise ValueError(f"Unknown tokenizer {tokenizer_id}. Please define token groups for this tokenizer.")
+
+
+def print_token_groups(tokenizer: PreTrainedTokenizerBase, token_groups: dict[str, list[int]]):
+    for group_name, token_ids in token_groups.items():
+        print(f"Token group: {group_name}")
+        display(
+            pd.DataFrame(
+                {
+                    "token_id": token_ids,
+                    "token": tokenizer.convert_ids_to_tokens(token_ids),
+                }
+            )
+        )

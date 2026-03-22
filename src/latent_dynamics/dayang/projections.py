@@ -7,6 +7,8 @@ from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.decomposition import PCA
@@ -236,6 +238,70 @@ def plot_layerwise_pca(
             showlegend=False,
             hovermode="closest",
         )
+        fig.show()
+    else:
+        raise ValueError(f"Unknown backend: '{backend}'")
+
+
+def plot_token_embeddings(
+    model,
+    tokenizer,
+    token_groups: dict[str, list[int]],
+    num_components: int = 5,
+    num_samles_use: int = 500,
+    num_samples_show: int = 1000,
+    backend: str = "plotly",
+):
+    np.random.seed(0)
+
+    def sample(token_ids, n):
+        return np.random.choice(token_ids, size=n, replace=len(token_ids) < n)
+
+    # Compute PCA on a subset of token embeddings from each group
+    indices = np.concatenate([sample(token_ids, n=num_samles_use) for token_ids in token_groups.values()])
+    embeddings = model.get_input_embeddings().weight.float().cpu().numpy()
+    embeddings = embeddings[indices]
+    pca = PCA(n_components=num_components)
+    pca.fit(embeddings)
+
+    # Plot cumulative explained variance ratio
+    plt.plot(np.cumsum(pca.explained_variance_ratio_), marker="o")
+    plt.title("Cumulative explained variance ratio")
+    plt.xlabel("Number of components")
+    plt.ylabel("Cumulative explained variance ratio")
+    plt.show()
+
+    # Create dataframe for plotting
+    groups = []
+    tokens = []
+    pcs = {f"PC{i + 1}": [] for i in range(num_components)}
+    for token_group, token_ids in token_groups.items():
+        # Transform a subset of token embeddings from each group
+        if len(token_ids) > num_samples_show:
+            token_ids = sample(token_ids, n=num_samples_show)
+        embeddings_proj = pca.transform(embeddings[token_ids])
+        # Aggregate data for plotting
+        groups.extend([token_group] * len(token_ids))
+        tokens.extend(map(escape_token, tokenizer.convert_ids_to_tokens(token_ids)))
+        for i in range(num_components):
+            pcs[f"PC{i + 1}"].extend(embeddings_proj[:, i])
+    df = pd.DataFrame({"token_group": groups, "token": tokens, **pcs})
+
+    # Plot pairplot of principal components
+    if backend == "seaborn":
+        import seaborn as sns
+
+        sns.pairplot(df, hue="token_group", plot_kws=dict(s=10, alpha=0.75))
+    elif backend == "plotly":
+        fig = px.scatter_matrix(
+            df,
+            dimensions=[f"PC{i + 1}" for i in range(num_components)],
+            color="token_group",
+            hover_data="token",
+            opacity=0.5,
+        )
+        fig.update_traces(diagonal_visible=False, marker_size=3)
+        fig.update_layout(title="PCA of token embeddings", width=200 * num_components, height=200 * num_components)
         fig.show()
     else:
         raise ValueError(f"Unknown backend: '{backend}'")
