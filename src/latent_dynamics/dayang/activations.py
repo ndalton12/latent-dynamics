@@ -138,7 +138,9 @@ class Activations:
             layer_idx = int(file.stem.split("_")[1])
             activations[layer_idx] = np.load(file)
         # Load topk
-        topk = pd.read_json(path / "topk.json", orient="columns").to_dict()
+        topk = pd.read_json(path / "topk.json", orient="columns")
+        topk = topk.map(lambda x: {"tokens": np.array(x["tokens"]), "probs": np.array(x["probs"])})
+        topk = topk.to_dict()
         return cls(samples=samples, activations=activations, topk=topk)
 
     def extract_topk(
