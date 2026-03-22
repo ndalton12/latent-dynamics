@@ -81,7 +81,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         )
 
         self.out = widgets.Output()
-        super().__init__(children=[widgets.HBox([col_extract_activations, col_extract_topk, col_load]), self.out])
+        super().__init__(children=[widgets.HBox([col_extract_activations, col_extract_topk]), col_load, self.out])
 
         # Register handlers
         self.w_include_response.observe(self._update_custom_response, names="value")
