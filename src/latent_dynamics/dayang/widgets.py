@@ -67,7 +67,9 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         self.w_topk_model = widgets.Dropdown(options=models, value=model, description="Model")
         self.w_topk_layer = widgets.SelectMultiple(description="Layers")
         self.w_topk_k = widgets.IntText(value=10, min=1, description="k")
-        self.btn_extract_topk = widgets.Button(description="Extract Top-k", button_style="primary", disabled=True)
+        self.btn_extract_topk = widgets.Button(
+            description="Extract top-k tokens", button_style="primary", disabled=True
+        )
         col_extract_topk = widgets.VBox([self.w_topk_model, self.w_topk_layer, self.w_topk_k, self.btn_extract_topk])
 
         self.w_path = widgets.Combobox(options=get_activation_folders(self.search_path), description="Path")

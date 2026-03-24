@@ -157,13 +157,6 @@ def plot_layerwise_pca(
                         color=color,
                         markersize=6,
                     )
-                    # # Annotate with tokens
-                    # if annotate_tokens:
-                    #     tokens = sample["tokens"]
-                    #     if layer_idx == 0:
-                    #         print(tokens)
-                    #     for token, (x, y) in zip(tokens, activations_proj):
-                    #         ax.text(x, y, token, fontsize=6)
 
             ax.grid(True, alpha=0.25)
             ax.set_title(f"Layer {layer_idx}")
