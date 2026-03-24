@@ -52,7 +52,7 @@ def get_tooltip(sample: dict, topk: int = 3, html: bool = False) -> list[str]:
 
 def compute_layerwise_pca(
     activations: Activations,
-    pool_method: PoolMethod,
+    pool_method: PoolMethod = "last",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
     num_components: int = 2,
@@ -100,7 +100,7 @@ def plot_layerwise_pca_ratio(pcas: list[PCA]):
 def plot_layerwise_pca(
     activations: Activations,
     pcas: list[PCA],
-    pool_method: PoolMethod,
+    pool_method: PoolMethod = "last",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
     ncols: int = 5,
@@ -252,10 +252,10 @@ def plot_token_embeddings(
     num_samples_show: int = 1000,
     backend: str = "plotly",
 ):
-    np.random.seed(0)
+    rng = np.random.default_rng(seed=0)
 
     def sample(token_ids, n):
-        return np.random.choice(token_ids, size=n, replace=len(token_ids) < n)
+        return rng.choice(token_ids, size=n, replace=len(token_ids) < n)
 
     # Compute PCA on a subset of token embeddings from each group
     indices = np.concatenate([sample(token_ids, n=num_samles_use) for token_ids in token_groups.values()])

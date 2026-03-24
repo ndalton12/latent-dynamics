@@ -120,7 +120,7 @@ def compute_layerwise_score(
 def plot_layerwise_score(
     activations: Activations,
     readers: list[Reader],
-    pool_method: PoolMethod,
+    pool_method: PoolMethod = "last",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
     ncols: int = 5,
