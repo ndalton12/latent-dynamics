@@ -25,7 +25,8 @@ def escape_token(token: str, html: bool = False) -> str:
 
 
 def tokens_to_text(tokens: list[str], highlight: int | None = None, html: bool = False) -> str:
-    tokens = ["<b>" + escape_token(t, html=html) + "</b>" if i == highlight else t for i, t in enumerate(tokens)]
+    tokens = [escape_token(t, html=html) for t in tokens]
+    tokens = ["<b>" + t + "</b>" if i == highlight else t for i, t in enumerate(tokens)]
     text = " ".join(tokens)
     return "<br>".join(textwrap.wrap(text, width=80))
 
