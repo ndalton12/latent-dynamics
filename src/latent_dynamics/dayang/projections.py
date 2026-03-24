@@ -11,10 +11,40 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA as _PCA
 from tqdm.auto import tqdm
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod
+
+
+class PCA(_PCA):
+    """PCA subclass which preserves the origin.
+
+    Standard PCA centers data by subtracting the mean `\\mu`, which shifts the
+    global origin. This class restores the origin by subtracting the projected
+    offset, effectively calculating :math:`X_{projected} = X V^T`, where `V` are
+    the principal components derived from the centered data.
+    This preserves angular relationships (cosine similarity) from the
+    original space to the visualization.
+
+    Attributes:
+        origin_offset_ (ndarray): The projected coordinates of the
+            high-dimensional origin in the reduced space.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def fit(self, X, y=None):
+        super().fit(X, y)
+        self.origin_proj_ = super().transform(np.zeros((1, X.shape[1])))
+        return self
+
+    def transform(self, X, keep_origin: bool = True):
+        X_proj = super().transform(X)
+        if keep_origin:
+            X_proj -= self.origin_proj_
+        return X_proj
 
 
 def choice(
@@ -289,7 +319,7 @@ def plot_token_embeddings(
     tokens = []
     pcs = {f"PC{i + 1}": [] for i in range(num_components)}
     for token_group, token_ids in token_groups.items():
-        # Transform a subset of token embeddings from each group
+        # Project token embeddings
         token_ids = choice(token_ids, at_most=num_samples_show)
         embeddings_proj = pca.transform(embeddings[token_ids])
         # Aggregate data for plotting
