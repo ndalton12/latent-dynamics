@@ -194,12 +194,13 @@ class Activations:
 
         if isinstance(sample_ids, str):
             sample_id = sample_ids
-            metadata = self.samples.loc[sample_id]
+            sample = self.samples.loc[sample_id]
             activations = self.activations[layer_idx][sample_id]  # shape: (num_tokens, hidden_size)
+            tokens = sample["tokens"]
             if layer_idx in self.topk:
                 activations, tokens, token_positions, topk_tokens, topk_probs = _pool(
                     activations,
-                    metadata["tokens"],
+                    tokens,
                     self.topk[layer_idx][sample_id]["tokens"],
                     self.topk[layer_idx][sample_id]["probs"],
                     pool_method=pool_method,
@@ -209,17 +210,17 @@ class Activations:
             else:
                 activations, tokens, token_positions = _pool(
                     activations,
-                    metadata["tokens"],
+                    tokens,
                     pool_method=pool_method,
                     exclude_bos=exclude_bos,
                     exclude_special_tokens=exclude_special_tokens,
                 )
                 topk_tokens = [None] * len(tokens)
                 topk_probs = [None] * len(tokens)
-            metadata["tokens_all"] = metadata.pop("tokens")  # rename since key used for pooled tokens
+            sample["tokens_all"] = sample.pop("tokens")  # rename since key used for pooled tokens
             return {
                 "id": sample_id,
-                **metadata.to_dict(),
+                **sample.to_dict(),
                 "activations": activations,  # shape: (num_pooled_tokens, hidden_size)
                 "tokens": tokens,  # shape: (num_pooled_tokens,)
                 "token_positions": token_positions,  # shape: (num_pooled_tokens,)
@@ -251,12 +252,12 @@ class Activations:
 
         if isinstance(sample_ids, str):
             sample_id = sample_ids
-            metadata = self.samples.loc[sample_id]
+            sample = self.samples.loc[sample_id]
             activations = np.stack(
                 [self.activations[layer_idx][sample_id] for layer_idx in self.layers],
                 axis=1,
             )  # shape: (num_tokens, num_layers, hidden_size)
-            tokens = metadata["tokens"]
+            tokens = sample["tokens"]
             topk_tokens = np.empty((len(tokens), self.num_layers), dtype=object)
             topk_probs = np.empty((len(tokens), self.num_layers), dtype=object)
             for i, layer_idx in enumerate(self.layers):
@@ -275,10 +276,10 @@ class Activations:
                 exclude_bos=exclude_bos,
                 exclude_special_tokens=exclude_special_tokens,
             )
-            metadata["tokens_all"] = metadata.pop("tokens")  # rename since key used for pooled tokens
+            sample["tokens_all"] = sample.pop("tokens")  # rename since key used for pooled tokens
             return {
                 "id": sample_id,
-                **metadata.to_dict(),
+                **sample.to_dict(),
                 "activations": activations,  # shape: (num_pooled_tokens, num_layers, hidden_size)
                 "tokens": tokens,  # shape: (num_pooled_tokens,)
                 "token_positions": token_positions,  # shape: (num_pooled_tokens,)
