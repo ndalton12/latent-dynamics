@@ -254,9 +254,8 @@ def plot_token_embeddings(
     # Compute PCA on a subset of token embeddings from each group
     indices = np.concatenate([sample(token_ids, n=num_samles_use) for token_ids in token_groups.values()])
     embeddings = model.get_input_embeddings().weight.float().cpu().numpy()
-    embeddings = embeddings[indices]
     pca = PCA(n_components=num_components)
-    pca.fit(embeddings)
+    pca.fit(embeddings[indices])
 
     # Plot cumulative explained variance ratio
     plt.plot(np.cumsum(pca.explained_variance_ratio_), marker="o")
