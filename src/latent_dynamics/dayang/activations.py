@@ -104,7 +104,7 @@ def _topk(logits: torch.Tensor, tokenizer: PreTrainedTokenizerBase, k: int = 10)
 class Activations:
     samples: pd.DataFrame
     activations: dict[int, dict[str, np.ndarray]]  # layer_idx -> sample_id -> activations
-    topk: dict[int, dict[str, dict] | None] = field(default_factory=dict)  # layer_idx -> sample_id -> topk
+    topk: dict[int, dict[str, dict]] = field(default_factory=dict)  # layer_idx -> sample_id -> topk
 
     @property
     def num_samples(self) -> int:
@@ -221,10 +221,10 @@ class Activations:
                 "id": sample_id,
                 **metadata.to_dict(),
                 "activations": activations,  # shape: (num_pooled_tokens, hidden_size)
-                "tokens": tokens,
-                "token_positions": token_positions,
-                "topk_tokens": topk_tokens,
-                "topk_probs": topk_probs,
+                "tokens": tokens,  # shape: (num_pooled_tokens,)
+                "token_positions": token_positions,  # shape: (num_pooled_tokens,)
+                "topk_tokens": topk_tokens,  # shape: (num_pooled_tokens, topk | None)
+                "topk_probs": topk_probs,  # shape: (num_pooled_tokens, topk | None)
             }
         else:
             return [
@@ -253,25 +253,54 @@ class Activations:
             sample_id = sample_ids
             metadata = self.samples.loc[sample_id]
             activations = np.stack(
-                [self.activations[layer_idx][sample_id] for layer_idx in self.layers], axis=1
+                [self.activations[layer_idx][sample_id] for layer_idx in self.layers],
+                axis=1,
             )  # shape: (num_tokens, num_layers, hidden_size)
-            activations, tokens, token_positions = _pool(
+            topk_tokens = np.stack(
+                [self.topk[layer_idx][sample_id]["tokens"] for layer_idx in self.layers if layer_idx in self.topk],
+                axis=1,
+            )  # shape: (num_tokens, num_avail_layers, topk)
+            print(topk_tokens.shape, topk_tokens.dtype)
+            topk_probs = np.stack(
+                [self.topk[layer_idx][sample_id]["probs"] for layer_idx in self.layers if layer_idx in self.topk],
+                axis=1,
+            )  # shape: (num_tokens, num_avail_layers, topk)
+            print(topk_probs.shape, topk_probs.dtype)
+            activations, tokens, token_positions, topk_tokens, topk_probs = _pool(
                 activations,
                 metadata["tokens"],
+                topk_tokens,
+                topk_probs,
                 pool_method=pool_method,
                 exclude_bos=exclude_bos,
                 exclude_special_tokens=exclude_special_tokens,
             )
-            # TODO pool topk
+            layer_idx_to_i = np.cumsum([layer_idx in self.topk for layer_idx in self.layers]) - 1
+            print(layer_idx_to_i)
+            topk_tokens = [
+                [
+                    topk_tokens[j, layer_idx_to_i[layer_idx]] if layer_idx in self.topk else None
+                    for layer_idx in self.layers
+                ]
+                for j in range(len(tokens))
+            ]
+            topk_probs = [
+                [
+                    topk_probs[j, layer_idx_to_i[layer_idx]] if layer_idx in self.topk else None
+                    for layer_idx in self.layers
+                ]
+                for j in range(len(tokens))
+            ]
+            print(len(topk_tokens), len(topk_tokens[0]))
             metadata["tokens_all"] = metadata.pop("tokens")  # rename since key used for pooled tokens
             return {
                 "id": sample_id,
                 **metadata.to_dict(),
                 "activations": activations,  # shape: (num_pooled_tokens, num_layers, hidden_size)
-                "tokens": tokens,
-                "token_positions": token_positions,
-                # "topk_tokens": topk_tokens,
-                # "topk_probs": topk_probs,
+                "tokens": tokens,  # shape: (num_pooled_tokens,)
+                "token_positions": token_positions,  # shape: (num_pooled_tokens,)
+                "topk_tokens": topk_tokens,  # shape: (num_pooled_tokens, num_layers, topk | None)
+                "topk_probs": topk_probs,  # shape: (num_pooled_tokens, num_layers, topk | None)
             }
         else:
             return [
