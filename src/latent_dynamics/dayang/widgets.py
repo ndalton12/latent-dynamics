@@ -215,7 +215,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
     @property
     def include_response(self) -> bool | str:
-        if self.w_include_response.value == "Custom":
+        if self.w_include_response.value == "custom":
             return self.w_custom_response.value
         else:
             return self.w_include_response.value
