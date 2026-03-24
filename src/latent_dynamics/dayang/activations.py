@@ -256,42 +256,25 @@ class Activations:
                 [self.activations[layer_idx][sample_id] for layer_idx in self.layers],
                 axis=1,
             )  # shape: (num_tokens, num_layers, hidden_size)
-            topk_tokens = np.stack(
-                [self.topk[layer_idx][sample_id]["tokens"] for layer_idx in self.layers if layer_idx in self.topk],
-                axis=1,
-            )  # shape: (num_tokens, num_avail_layers, topk)
-            print(topk_tokens.shape, topk_tokens.dtype)
-            topk_probs = np.stack(
-                [self.topk[layer_idx][sample_id]["probs"] for layer_idx in self.layers if layer_idx in self.topk],
-                axis=1,
-            )  # shape: (num_tokens, num_avail_layers, topk)
-            print(topk_probs.shape, topk_probs.dtype)
+            tokens = metadata["tokens"]
+            topk_tokens = np.empty((len(tokens), self.num_layers), dtype=object)
+            topk_probs = np.empty((len(tokens), self.num_layers), dtype=object)
+            for i, layer_idx in enumerate(self.layers):
+                if layer_idx in self.topk:
+                    topk_tokens[:, i] = list(self.topk[layer_idx][sample_id]["tokens"])
+                    topk_probs[:, i] = list(self.topk[layer_idx][sample_id]["probs"])
+                else:
+                    topk_tokens[:, i] = None
+                    topk_probs[:, i] = None
             activations, tokens, token_positions, topk_tokens, topk_probs = _pool(
                 activations,
-                metadata["tokens"],
+                tokens,
                 topk_tokens,
                 topk_probs,
                 pool_method=pool_method,
                 exclude_bos=exclude_bos,
                 exclude_special_tokens=exclude_special_tokens,
             )
-            layer_idx_to_i = np.cumsum([layer_idx in self.topk for layer_idx in self.layers]) - 1
-            print(layer_idx_to_i)
-            topk_tokens = [
-                [
-                    topk_tokens[j, layer_idx_to_i[layer_idx]] if layer_idx in self.topk else None
-                    for layer_idx in self.layers
-                ]
-                for j in range(len(tokens))
-            ]
-            topk_probs = [
-                [
-                    topk_probs[j, layer_idx_to_i[layer_idx]] if layer_idx in self.topk else None
-                    for layer_idx in self.layers
-                ]
-                for j in range(len(tokens))
-            ]
-            print(len(topk_tokens), len(topk_tokens[0]))
             metadata["tokens_all"] = metadata.pop("tokens")  # rename since key used for pooled tokens
             return {
                 "id": sample_id,
