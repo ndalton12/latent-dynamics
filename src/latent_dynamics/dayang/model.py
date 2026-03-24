@@ -94,8 +94,8 @@ def get_token_groups(tokenizer: PreTrainedTokenizerBase) -> dict[str, list[int]]
     tokenizer_id = f"{tokenizer.__class__.__name__}_{len(tokenizer)}"
     if tokenizer_id == "GemmaTokenizer_262145":
         return {
-            "unused": list(range(6, 105)) + list(range(256001, 262144)),
             "common": list(range(494, 255968)),
+            "unused": list(range(6, 105)) + list(range(256001, 262144)),
             "whitespace": list(range(107, 168)) + list(range(255968, 255999)),
             "bytes": list(range(238, 494)),
             "html": list(range(168, 238)),

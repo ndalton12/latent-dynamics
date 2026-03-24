@@ -17,6 +17,31 @@ from tqdm.auto import tqdm
 from latent_dynamics.dayang.activations import Activations, PoolMethod
 
 
+def choice(
+    token_ids: list[int] | np.array,
+    at_most: int | None = None,
+    exactly: int | None = None,
+    seed: int = 42,
+) -> np.array:
+    if at_most is not None and exactly is not None:
+        raise ValueError("Cannot specify both 'at_most' and 'exactly'.")
+
+    token_ids = np.asarray(token_ids)
+    rng = np.random.default_rng(seed)
+    if exactly is not None:
+        if len(token_ids) <= exactly:
+            return np.concatenate([token_ids, rng.choice(token_ids, size=exactly - len(token_ids), replace=True)])
+        else:
+            return rng.choice(token_ids, size=exactly, replace=False)
+    elif at_most is not None:
+        if len(token_ids) <= at_most:
+            return token_ids
+        else:
+            return rng.choice(token_ids, size=at_most, replace=False)
+    else:
+        return token_ids
+
+
 def escape_token(token: str, html: bool = False) -> str:
     if html:
         token = _html.escape(token)
@@ -242,17 +267,12 @@ def plot_token_embeddings(
     tokenizer,
     token_groups: dict[str, list[int]],
     num_components: int = 5,
-    num_samles_use: int = 500,
-    num_samples_show: int = 1000,
+    num_samles_use: int | None = 1000,
+    num_samples_show: int | None = None,
     backend: str = "plotly",
 ):
-    rng = np.random.default_rng(seed=0)
-
-    def sample(token_ids, n):
-        return rng.choice(token_ids, size=n, replace=len(token_ids) < n)
-
     # Compute PCA on a subset of token embeddings from each group
-    indices = np.concatenate([sample(token_ids, n=num_samles_use) for token_ids in token_groups.values()])
+    indices = np.concatenate([choice(token_ids, exactly=num_samles_use) for token_ids in token_groups.values()])
     embeddings = model.get_input_embeddings().weight.float().cpu().numpy()
     pca = PCA(n_components=num_components)
     pca.fit(embeddings[indices])
@@ -270,8 +290,7 @@ def plot_token_embeddings(
     pcs = {f"PC{i + 1}": [] for i in range(num_components)}
     for token_group, token_ids in token_groups.items():
         # Transform a subset of token embeddings from each group
-        if len(token_ids) > num_samples_show:
-            token_ids = sample(token_ids, n=num_samples_show)
+        token_ids = choice(token_ids, at_most=num_samples_show)
         embeddings_proj = pca.transform(embeddings[token_ids])
         # Aggregate data for plotting
         groups.extend([token_group] * len(token_ids))
