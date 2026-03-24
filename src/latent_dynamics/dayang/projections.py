@@ -35,8 +35,8 @@ def topk_to_text(topk_tokens: list[str], topk_probs: list[float], html: bool = F
     return ", ".join(f"'{escape_token(t, html=html)}' ({p:.2f})" for t, p in zip(topk_tokens, topk_probs))
 
 
-def get_tooltip(sample: dict, topk: int = 3, html: bool = False) -> list[str]:
-    """Create tooltip text for a given sample."""
+def get_tooltip_per_token(sample: dict, topk: int = 3, html: bool = False) -> list[str]:
+    """Create tooltip texts for each token for a given sample."""
     text = []
     for i, (token, token_pos, topk_tokens, topk_probs) in enumerate(
         zip(sample["tokens"], sample["token_positions"], sample["topk_tokens"], sample["topk_probs"])
@@ -199,8 +199,8 @@ def plot_layerwise_pca(
                         marker=dict(color=color, size=4, symbol=symbol),
                         line=dict(color=color, width=1.0),
                         opacity=alpha,
-                        hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{text}",
-                        text=get_tooltip(sample, html=True),
+                        hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
+                        hovertext=get_tooltip_per_token(sample, html=True),
                         showlegend=False,
                     ),
                     row=row,

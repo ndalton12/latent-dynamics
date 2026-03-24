@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from tqdm.auto import tqdm
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod
-from latent_dynamics.dayang.projections import get_tooltip
+from latent_dynamics.dayang.projections import get_tooltip_per_token
 
 
 class Reader(ABC):
@@ -162,7 +162,7 @@ def plot_layerwise_score(
                     line=dict(color=color, width=1.0),
                     opacity=alpha,
                     hovertemplate="Token Pos: %{x}<br>Score: %{y:.2f}<br>%{text}",
-                    text=get_tooltip(sample, html=True),
+                    text=get_tooltip_per_token(sample, html=True),
                     showlegend=False,
                 ),
                 row=row,
