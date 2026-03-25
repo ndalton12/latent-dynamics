@@ -22,7 +22,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
     activations: Activations | None = None
 
-    def __init__(self, search_path: str | Path = ".", **kwargs):
+    def __init__(self, out: widgets.Output | None = None, search_path: str | Path = ".", **kwargs):
         self.search_path = Path(search_path)
         models = list(MODEL_REGISTRY.keys())
         datasets = list(DATASET_REGISTRY.keys())
@@ -37,7 +37,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         # Create widgets
         self.w_model = widgets.Dropdown(options=models, value=model, description="Model")
         self.w_dataset = widgets.Dropdown(options=datasets, value=dataset, description="Dataset")
-        self.w_max_samples = widgets.IntText(value=max_samples, min=1, description="Max samples:")
+        self.w_max_samples = widgets.IntText(value=max_samples, min=1, description="Max samples")
         self.w_include_response = widgets.Dropdown(
             options=[
                 ("none", False),
@@ -82,8 +82,13 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             ]
         )
 
-        self.out = widgets.Output()
-        super().__init__(children=[widgets.HBox([col_extract_activations, col_extract_topk]), col_load, self.out])
+        children = [widgets.HBox([col_extract_activations, col_extract_topk]), col_load]
+        if out is None:
+            self.out = widgets.Output()
+            children.append(self.out)
+        else:
+            self.out = out
+        super().__init__(children=children)
 
         # Register handlers
         self.w_include_response.observe(self._update_custom_response, names="value")
