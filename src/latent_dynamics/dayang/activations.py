@@ -96,7 +96,7 @@ def _pool(
 def _topk(logits: torch.Tensor, tokenizer: PreTrainedTokenizerBase, k: int = 10) -> TopK:
     probs = torch.softmax(logits, dim=-1)
     topk_probs, topk_token_ids = probs.topk(k, dim=-1)
-    topk_probs = topk_probs.float().cpu().numpy()  # shape: (num_tokens, topk)
+    topk_probs = topk_probs.cpu().float().numpy()  # shape: (num_tokens, topk)
     topk_token_ids = topk_token_ids.cpu().numpy()  # shape: (num_tokens, topk)
     topk_tokens = np.array([tokenizer.convert_ids_to_tokens(ids) for ids in topk_token_ids])
     return TopK(tokens=topk_tokens, probs=topk_probs)
@@ -512,7 +512,7 @@ def extract_activations(
             # Store activations
             for layer_idx in layers:
                 acts_per_sample = outputs.hidden_states[layer_idx][i, mask]  # shape: (num_valid_tokens, hidden_size)
-                activations[layer_idx][sample_id] = acts_per_sample.float().cpu().numpy()
+                activations[layer_idx][sample_id] = acts_per_sample.cpu().float().numpy()
             # Store top-k next tokens and their probabilities for the last layer
             topk[last_layer_idx][sample_id] = _topk(outputs.logits[i, mask], tokenizer, k=k)
 

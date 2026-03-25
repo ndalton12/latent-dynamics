@@ -128,7 +128,7 @@ def get_token_embeddings(
         token_ids = list(range(len(tokenizer)))
 
     tokens = tokenizer.convert_ids_to_tokens(token_ids)
-    embeddings = model.get_input_embeddings().weight.float().cpu().numpy()[token_ids]
+    embeddings = model.get_input_embeddings().weight.cpu().float().numpy()[token_ids]
 
     if model.__class__.__name__.startswith("Gemma3"):
         # Gemma3 models scale token embeddings by sqrt(hidden_size)
