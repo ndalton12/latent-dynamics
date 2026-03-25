@@ -131,8 +131,8 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             self.out.clear_output(wait=True)
 
             # Extract activations
-            model, tokenizer = load_model_and_tokenizer(self.model)
-            dataset = load_dataset_from_spec(self.dataset, max_samples=self.max_samples)
+            model, tokenizer = load_model_and_tokenizer(self.model_name)
+            dataset = load_dataset_from_spec(self.dataset_name, max_samples=self.max_samples)
             activations = extract_activations(
                 model,
                 tokenizer,
@@ -145,10 +145,10 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             self._update_value(activations)
 
             # Update path with default path
-            dataset_name = self.w_dataset.value.replace("/", "_")
+            dataset_name = self.dataset_name.replace("/", "_")
             if self.max_samples is not None:
                 dataset_name += f"-{self.max_samples}"
-            self.w_path.value = str(self.search_path / dataset_name / self.w_model.value)
+            self.w_path.value = str(self.search_path / dataset_name / self.model_name)
 
     def _do_load(self, *args):
         if not self.path:
@@ -201,11 +201,11 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
                 self.activations.extract_topk(model, tokenizer, layer_idx=layer_idx, k=self.w_topk_k.value)
 
     @property
-    def model(self) -> str:
+    def model_name(self) -> str:
         return self.w_model.value
 
     @property
-    def dataset(self) -> str:
+    def dataset_name(self) -> str:
         return self.w_dataset.value
 
     @property
