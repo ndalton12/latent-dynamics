@@ -248,7 +248,13 @@ def plot_pca_per_layer(
         fig.tight_layout()
         plt.show()
     elif backend == "plotly":
-        fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
+        fig = make_subplots(
+            rows=nrows,
+            cols=ncols,
+            subplot_titles=[f"Layer {layer}" for layer in activations.layers],
+            horizontal_spacing=0.16 / ncols,
+            vertical_spacing=0.24 / nrows,
+        )
 
         for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting PCA per layer"), pcas)):
             row = (i // ncols) + 1
@@ -267,7 +273,7 @@ def plot_pca_per_layer(
                         marker=dict(size=4, color="gray", opacity=0.5),
                         hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
                         hovertext=[escape_token(token) for token in tokens],
-                        name="Embeddings",
+                        name="Token embeddings",
                     ),
                     row=row,
                     col=col,
@@ -319,15 +325,13 @@ def plot_pca_per_layer(
                         col=col,
                     )
 
-            fig.update_xaxes(title_text="PC1", row=row, col=col)
-            fig.update_yaxes(title_text="PC2", row=row, col=col)
-
+        fig.update_xaxes(title_text="PC1", row=nrows)
+        fig.update_yaxes(title_text="PC2", col=1)
         fig.update_layout(
-            height=300 * nrows,
             width=300 * ncols,
+            height=300 * nrows,
             title_text="PCA per layer",
             showlegend=False,
-            hovermode="closest",
         )
         fig.show()
     else:
@@ -340,8 +344,9 @@ def plot_pca_per_token(
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
     tokens_embeddings: tuple[list[str], np.array] | None = None,
-    ncols: int = 5,
+    ncols: int = 3,
     backend: Literal["matplotlib", "plotly"] = "plotly",
+    separate: bool = False,
     colorby: Literal["auto", "token", "sample", "is_safe"] | None = "auto",
     showlegend: Literal["auto"] | bool = "auto",
 ):
@@ -352,7 +357,7 @@ def plot_pca_per_token(
     )
 
     if colorby == "auto":
-        if len(samples) == 1:
+        if len(samples) == 1 and not separate:
             colorby = "token"
         elif len(samples) <= 5:
             colorby = "sample"
@@ -418,8 +423,33 @@ def plot_pca_per_token(
         #         )
         #     ax.set_title(f"{token_pos + 1}: {escape_token(token)}")
     elif backend == "plotly":
-        fig = go.Figure()
-        colors = fig.layout.template.layout.colorway
+        # Create figure
+        if separate:
+            if pool_method == "all":
+                raise ValueError(
+                    "Cannot use 'separate=True' with 'pool_method=all' since it requires token sequences of the same length."
+                )
+            num_tokens = len(samples[0]["tokens"])
+            nrows = math.ceil(num_tokens / ncols)
+            subplot_titles = []
+            for token_idx in range(num_tokens):
+                tokens = list(set(escape_token(sample["tokens"][token_idx]) for sample in samples))
+                subplot_titles.append(
+                    f"Tokens: {', '.join(tokens) if len(tokens) <= 3 else ', '.join(tokens[:2]) + ', ...'}"
+                )
+            fig = make_subplots(
+                rows=nrows,
+                cols=ncols,
+                subplot_titles=subplot_titles,
+                horizontal_spacing=0.1 / ncols,
+                vertical_spacing=0.15 / nrows,
+                shared_xaxes="all",
+                shared_yaxes="all",
+            )
+            fig.update_xaxes(showticklabels=True)
+            fig.update_yaxes(showticklabels=True)
+        else:
+            fig = go.Figure()
         # Plot token embeddings
         if tokens_embeddings is not None:
             fig.add_trace(
@@ -430,10 +460,13 @@ def plot_pca_per_token(
                     marker=dict(size=4, color="gray", opacity=0.5),
                     hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
                     hovertext=[escape_token(token) for token in tokens],
-                    name="Embeddings",
-                )
+                    name="Token embeddings",
+                ),
+                row="all" if separate else None,
+                col="all" if separate else None,
             )
         # Plot activations
+        colors = fig.layout.template.layout.colorway
         for sample_idx, sample in enumerate(samples):
             if colorby == "token":
                 color = None
@@ -448,7 +481,19 @@ def plot_pca_per_token(
             for token_idx, (acts, token, token_pos) in enumerate(
                 zip(sample["activations"], sample["tokens"], sample["token_positions"])
             ):
+                # Project activations
                 activations_proj = pca.transform(acts)
+                # Configure legend and grouping
+                legend_group = sample["id"] if len(samples) > 1 else None
+                if separate:
+                    legend_group_title = None
+                    trace_name = sample["id"] if token_idx == 0 else None
+                    show_legend = token_idx == 0
+                else:
+                    legend_group_title = sample["id"] if len(samples) > 1 else None
+                    trace_name = f"{token_pos + 1}: {escape_token(token)}"
+                    show_legend = True
+                # Plot activations in PCA space
                 fig.add_trace(
                     go.Scatter(
                         x=activations_proj[:, 0],
@@ -461,18 +506,22 @@ def plot_pca_per_token(
                         textfont=dict(size=6),
                         hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
                         hovertext=get_tooltip_per_layer(sample, token_idx, html=True),
-                        legendgroup=sample["id"] if len(samples) > 1 else None,
-                        legendgrouptitle_text=sample["id"] if len(samples) > 1 else None,
-                        name=f"{token_pos + 1}: {escape_token(token)}",
-                    )
+                        legendgroup=legend_group,
+                        legendgrouptitle_text=legend_group_title,
+                        name=trace_name,
+                        showlegend=show_legend,
+                    ),
+                    row=(token_idx // ncols) + 1 if separate else None,
+                    col=(token_idx % ncols) + 1 if separate else None,
                 )
+
+        fig.update_xaxes(title_text="PC1", row=nrows if separate else None)
+        fig.update_yaxes(title_text="PC2", col=1 if separate else None)
         fig.update_layout(
-            width=1000,
-            height=800,
+            width=500 * ncols if separate else 1000,
+            height=400 * nrows if separate else 800,
             title="PCA per token",
-            xaxis_title="PC1",
-            yaxis_title="PC2",
-            legend=dict(groupclick="toggleitem"),
+            legend=dict(groupclick="togglegroup" if separate else "toggleitem"),
             showlegend=showlegend,
         )
         fig.show()
