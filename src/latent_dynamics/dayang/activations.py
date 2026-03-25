@@ -91,20 +91,35 @@ def _pool(
     return activations, tokens.tolist(), token_positions.tolist(), *arrays
 
 
-def _topk(logits: torch.Tensor, tokenizer: PreTrainedTokenizerBase, k: int = 10) -> tuple[list[str], list[float]]:
+def _topk(logits: torch.Tensor, tokenizer: PreTrainedTokenizerBase, k: int = 10) -> TopK:
     probs = torch.softmax(logits, dim=-1)
     topk_probs, topk_token_ids = probs.topk(k, dim=-1)
     topk_probs = topk_probs.float().cpu().numpy()  # shape: (num_tokens, topk)
     topk_token_ids = topk_token_ids.cpu().numpy()  # shape: (num_tokens, topk)
     topk_tokens = np.array([tokenizer.convert_ids_to_tokens(ids) for ids in topk_token_ids])
-    return topk_tokens, topk_probs
+    return TopK(tokens=topk_tokens, probs=topk_probs)
+
+
+@dataclass
+class TopK:
+    tokens: np.ndarray  # shape: (num_tokens, topk)
+    probs: np.ndarray  # shape: (num_tokens, topk)
+
+    def __post_init__(self):
+        self.tokens = np.asarray(self.tokens)
+        self.probs = np.asarray(self.probs)
+
+        if self.tokens.shape != self.probs.shape:
+            raise ValueError(
+                f"Tokens and probabilities must have the same shape, got {self.tokens.shape} and {self.probs.shape}."
+            )
 
 
 @dataclass
 class Activations:
     samples: pd.DataFrame
     activations: dict[int, dict[str, np.ndarray]]  # layer_idx -> sample_id -> activations
-    topk: dict[int, dict[str, dict]] = field(default_factory=dict)  # layer_idx -> sample_id -> topk
+    topk: dict[int, dict[str, TopK]] = field(default_factory=dict)  # layer_idx -> sample_id -> topk
 
     @property
     def num_samples(self) -> int:
@@ -142,7 +157,7 @@ class Activations:
             activations[layer_idx] = np.load(file)
         # Load topk
         topk = pd.read_json(path / "topk.json", orient="columns")
-        topk = topk.map(lambda x: {"tokens": np.array(x["tokens"]), "probs": np.array(x["probs"])})
+        topk = topk.map(lambda x: TopK(**x))
         topk = topk.to_dict()
         return cls(samples=samples, activations=activations, topk=topk)
 
@@ -167,12 +182,11 @@ class Activations:
             acts_per_sample = torch.tensor(acts_per_sample, dtype=model.dtype).to(model.device)
             logits_per_sample = model.lm_head(acts_per_sample)
             # Compute top-k next tokens and their probabilities
-            topk_tokens, topk_probs = _topk(logits_per_sample, tokenizer, k=k)
-            self.topk[layer_idx][sample_id] = {"tokens": topk_tokens, "probs": topk_probs}
+            self.topk[layer_idx][sample_id] = _topk(logits_per_sample, tokenizer, k=k)
 
-        num_tokens = sum(len(topk_per_sample["tokens"]) for topk_per_sample in self.topk[layer_idx].values())
+        num_tokens = sum(len(topk_per_sample.tokens) for topk_per_sample in self.topk[layer_idx].values())
         num_bytes = sum(
-            next_tokens["tokens"].nbytes + next_tokens["probs"].nbytes for next_tokens in self.topk[layer_idx].values()
+            next_tokens.tokens.nbytes + next_tokens.probs.nbytes for next_tokens in self.topk[layer_idx].values()
         )
         print(
             f"Extracted top-{k} next tokens for layer {layer_idx}"
@@ -201,8 +215,8 @@ class Activations:
                 activations, tokens, token_positions, topk_tokens, topk_probs = _pool(
                     activations,
                     tokens,
-                    self.topk[layer_idx][sample_id]["tokens"],
-                    self.topk[layer_idx][sample_id]["probs"],
+                    self.topk[layer_idx][sample_id].tokens,
+                    self.topk[layer_idx][sample_id].probs,
                     pool_method=pool_method,
                     exclude_bos=exclude_bos,
                     exclude_special_tokens=exclude_special_tokens,
@@ -262,8 +276,8 @@ class Activations:
             topk_probs = np.empty((len(tokens), self.num_layers), dtype=object)
             for i, layer_idx in enumerate(self.layers):
                 if layer_idx in self.topk:
-                    topk_tokens[:, i] = list(self.topk[layer_idx][sample_id]["tokens"])
-                    topk_probs[:, i] = list(self.topk[layer_idx][sample_id]["probs"])
+                    topk_tokens[:, i] = list(self.topk[layer_idx][sample_id].tokens)
+                    topk_probs[:, i] = list(self.topk[layer_idx][sample_id].probs)
                 else:
                     topk_tokens[:, i] = None
                     topk_probs[:, i] = None
@@ -461,8 +475,7 @@ def extract_activations(
                 acts_per_sample = outputs.hidden_states[layer_idx][i, mask]  # shape: (num_valid_tokens, hidden_size)
                 activations[layer_idx][sample_id] = acts_per_sample.float().cpu().numpy()
             # Store top-k next tokens and their probabilities for the last layer
-            topk_tokens, topk_probs = _topk(outputs.logits[i, mask], tokenizer, k=k)
-            topk[last_layer_idx][sample_id] = {"tokens": topk_tokens, "probs": topk_probs}
+            topk[last_layer_idx][sample_id] = _topk(outputs.logits[i, mask], tokenizer, k=k)
 
     num_samples = len(samples)
     num_tokens = sum(len(sample["tokens"]) for sample in samples)
@@ -472,7 +485,7 @@ def extract_activations(
         acts_per_layer.nbytes for acts_per_layer in activations.values() for acts_per_layer in acts_per_layer.values()
     )
     num_bytes_topk = sum(
-        next_tokens["tokens"].nbytes + next_tokens["probs"].nbytes for next_tokens in topk[last_layer_idx].values()
+        next_tokens.tokens.nbytes + next_tokens.probs.nbytes for next_tokens in topk[last_layer_idx].values()
     )
     print(
         f"Extracted activations for {num_samples} samples"
