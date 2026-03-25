@@ -2,12 +2,14 @@ import contextlib
 from pathlib import Path
 
 import ipywidgets as widgets
+import numpy as np
 from natsort import natsort_keygen
 from traitlets import Bool
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod, extract_activations
 from latent_dynamics.dayang.data import DATASET_REGISTRY, load_dataset_from_spec
-from latent_dynamics.dayang.model import MODEL_REGISTRY, load_model_and_tokenizer
+from latent_dynamics.dayang.model import MODEL_REGISTRY, get_token_embeddings, load_model_and_tokenizer
+from latent_dynamics.dayang.projections import choice
 
 
 def _str_to_slice(s: str) -> slice | None:
@@ -329,3 +331,59 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
     @property
     def exclude_special_tokens(self) -> bool | list[str]:
         return self.w_exclude_special_tokens.value
+
+
+class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
+    value = Bool(False, help="Dummy trait to trigger observers on changes.")
+    token_embeddings: tuple[list[str], np.array] | None = None
+
+    def __init__(self, out: widgets.Output | None = None, **kwargs):
+        models = list(MODEL_REGISTRY.keys())
+
+        # Set defaults
+        model = kwargs.get("model", models[0])
+
+        # Create widgets
+        self.w_model = widgets.Dropdown(options=models, value=model, description="Model")
+        self.w_max_tokens = widgets.IntText(value=10000, min=1, description="Max tokens")
+        self.btn_extract = widgets.Button(description="Load token embeddings", button_style="primary")
+
+        children = [self.w_model, self.w_max_tokens, self.btn_extract]
+        if out is None:
+            self.out = widgets.Output()
+            children.append(self.out)
+        else:
+            self.out = out
+        super().__init__(children=children)
+
+        # Register handlers
+        self.btn_extract.on_click(self._do_extract)
+
+    def _update_value(self, token_embeddings: tuple[list[str], np.array] | None):
+        self.token_embeddings = token_embeddings
+        self.value = not self.value
+
+    @contextlib.contextmanager
+    def _update_buttons(self):
+        self.btn_extract.disabled = True
+        try:
+            yield
+        finally:
+            self.btn_extract.disabled = False
+
+    def _do_extract(self, *args):
+        with self._update_buttons(), self.out:
+            self.out.clear_output(wait=True)
+
+            model, tokenizer = load_model_and_tokenizer(self.model_name)
+            token_ids = choice(range(tokenizer.vocab_size), at_most=self.max_tokens)
+            token_embeddings = get_token_embeddings(model, tokenizer, token_ids=token_ids)
+            self._update_value(token_embeddings)
+
+    @property
+    def model_name(self) -> str:
+        return self.w_model.value
+
+    @property
+    def max_tokens(self) -> int:
+        return self.w_max_tokens.value

@@ -138,4 +138,11 @@ def get_token_embeddings(
         # Gemma3 models scale token embeddings by sqrt(hidden_size)
         # reference: https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/gemma3/modeling_gemma3.py#L102
         embeddings *= np.sqrt(model.config.hidden_size)
+
+    print(
+        f"Loaded token embeddings: {model.name_or_path}"
+        f"\n  Number of tokens: {len(tokens)}"
+        f"\n  Shape of embeddings: {embeddings.shape[1]}"
+        f"\n  Size of embeddings: {embeddings.nbytes / 1024**2:.2f} MB"
+    )
     return tokens, embeddings
