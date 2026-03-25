@@ -123,7 +123,7 @@ def get_tooltip_per_layer(sample: dict, i: int, k: int = 3, html: bool = False) 
     return text
 
 
-def compute_layerwise_pca(
+def compute_pca_per_layer(
     activations: Activations,
     pool_method: PoolMethod = "last",
     exclude_bos: bool = True,
@@ -134,7 +134,7 @@ def compute_layerwise_pca(
     pcas = []
     explained_ratios = []
 
-    for layer_idx in tqdm(activations.layers, desc="Computing layer-wise PCA"):
+    for layer_idx in tqdm(activations.layers, desc="Computing PCA per layer"):
         # Aggregate activations across all samples for the current layer
         samples = activations.get_per_layer(
             layer_idx=layer_idx,
@@ -153,7 +153,7 @@ def compute_layerwise_pca(
     return pcas
 
 
-def plot_layerwise_pca_ratio(pcas: list[PCA]):
+def plot_pca_ratio_per_layer(pcas: list[PCA]):
     """Compute PCA for each layer and plot explained variance ratio."""
     explained_ratios = []
 
@@ -170,7 +170,7 @@ def plot_layerwise_pca_ratio(pcas: list[PCA]):
     plt.show()
 
 
-def plot_layerwise_pca(
+def plot_pca_per_layer(
     activations: Activations,
     pcas: list[PCA],
     pool_method: PoolMethod = "last",
@@ -186,7 +186,7 @@ def plot_layerwise_pca(
     if backend == "matplotlib":
         fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 3.6 * nrows), squeeze=False)
         axes = axes.flatten()
-        for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise PCA"), pcas)):
+        for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting PCA per layer"), pcas)):
             ax = axes[i]
 
             samples = activations.get_per_layer(
@@ -245,7 +245,7 @@ def plot_layerwise_pca(
     elif backend == "plotly":
         fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
 
-        for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise PCA"), pcas)):
+        for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting PCA per layer"), pcas)):
             row = (i // ncols) + 1
             col = (i % ncols) + 1
 
@@ -304,63 +304,6 @@ def plot_layerwise_pca(
             showlegend=False,
             hovermode="closest",
         )
-        fig.show()
-    else:
-        raise ValueError(f"Unknown backend: '{backend}'")
-
-
-def plot_token_embeddings(
-    model,
-    tokenizer,
-    token_groups: dict[str, list[int]],
-    num_components: int = 5,
-    num_samles_use: int | None = 1000,
-    num_samples_show: int | None = None,
-    backend: str = "plotly",
-):
-    # Compute PCA on a subset of token embeddings from each group
-    indices = np.concatenate([choice(token_ids, exactly=num_samles_use) for token_ids in token_groups.values()])
-    embeddings = model.get_input_embeddings().weight.float().cpu().numpy()
-    pca = PCA(n_components=num_components)
-    pca.fit(embeddings[indices])
-
-    # Plot cumulative explained variance ratio
-    plt.plot(np.cumsum(pca.explained_variance_ratio_), marker="o")
-    plt.title("Cumulative explained variance ratio")
-    plt.xlabel("Number of components")
-    plt.ylabel("Cumulative explained variance ratio")
-    plt.show()
-
-    # Create dataframe for plotting
-    groups = []
-    tokens = []
-    pcs = {f"PC{i + 1}": [] for i in range(num_components)}
-    for token_group, token_ids in token_groups.items():
-        # Project token embeddings
-        token_ids = choice(token_ids, at_most=num_samples_show)
-        embeddings_proj = pca.transform(embeddings[token_ids])
-        # Aggregate data for plotting
-        groups.extend([token_group] * len(token_ids))
-        tokens.extend(map(escape_token, tokenizer.convert_ids_to_tokens(token_ids)))
-        for i in range(num_components):
-            pcs[f"PC{i + 1}"].extend(embeddings_proj[:, i])
-    df = pd.DataFrame({"token_group": groups, "token": tokens, **pcs})
-
-    # Plot pairplot of principal components
-    if backend == "seaborn":
-        import seaborn as sns
-
-        sns.pairplot(df, hue="token_group", plot_kws=dict(s=10, alpha=0.75))
-    elif backend == "plotly":
-        fig = px.scatter_matrix(
-            df,
-            dimensions=[f"PC{i + 1}" for i in range(num_components)],
-            color="token_group",
-            hover_data="token",
-            opacity=0.5,
-        )
-        fig.update_traces(diagonal_visible=False, marker_size=3)
-        fig.update_layout(title="PCA of token embeddings", width=200 * num_components, height=200 * num_components)
         fig.show()
     else:
         raise ValueError(f"Unknown backend: '{backend}'")
@@ -470,7 +413,7 @@ def plot_pca_per_token(
                 )
             )
         fig.update_layout(
-            title=f"Tokenwise PCA: {sample_id}",
+            title=f"PCA per token: {sample_id}",
             xaxis_title="PC1",
             yaxis_title="PC2",
             legend_title="Tokens",
@@ -478,3 +421,60 @@ def plot_pca_per_token(
             height=800,
         )
         fig.show()
+
+
+def plot_token_embeddings(
+    model,
+    tokenizer,
+    token_groups: dict[str, list[int]],
+    num_components: int = 5,
+    num_samles_use: int | None = 1000,
+    num_samples_show: int | None = None,
+    backend: str = "plotly",
+):
+    # Compute PCA on a subset of token embeddings from each group
+    indices = np.concatenate([choice(token_ids, exactly=num_samles_use) for token_ids in token_groups.values()])
+    embeddings = model.get_input_embeddings().weight.float().cpu().numpy()
+    pca = PCA(n_components=num_components)
+    pca.fit(embeddings[indices])
+
+    # Plot cumulative explained variance ratio
+    plt.plot(np.cumsum(pca.explained_variance_ratio_), marker="o")
+    plt.title("Cumulative explained variance ratio")
+    plt.xlabel("Number of components")
+    plt.ylabel("Cumulative explained variance ratio")
+    plt.show()
+
+    # Create dataframe for plotting
+    groups = []
+    tokens = []
+    pcs = {f"PC{i + 1}": [] for i in range(num_components)}
+    for token_group, token_ids in token_groups.items():
+        # Project token embeddings
+        token_ids = choice(token_ids, at_most=num_samples_show)
+        embeddings_proj = pca.transform(embeddings[token_ids])
+        # Aggregate data for plotting
+        groups.extend([token_group] * len(token_ids))
+        tokens.extend(map(escape_token, tokenizer.convert_ids_to_tokens(token_ids)))
+        for i in range(num_components):
+            pcs[f"PC{i + 1}"].extend(embeddings_proj[:, i])
+    df = pd.DataFrame({"token_group": groups, "token": tokens, **pcs})
+
+    # Plot pairplot of principal components
+    if backend == "seaborn":
+        import seaborn as sns
+
+        sns.pairplot(df, hue="token_group", plot_kws=dict(s=10, alpha=0.75))
+    elif backend == "plotly":
+        fig = px.scatter_matrix(
+            df,
+            dimensions=[f"PC{i + 1}" for i in range(num_components)],
+            color="token_group",
+            hover_data="token",
+            opacity=0.5,
+        )
+        fig.update_traces(diagonal_visible=False, marker_size=3)
+        fig.update_layout(title="PCA of token embeddings", width=200 * num_components, height=200 * num_components)
+        fig.show()
+    else:
+        raise ValueError(f"Unknown backend: '{backend}'")

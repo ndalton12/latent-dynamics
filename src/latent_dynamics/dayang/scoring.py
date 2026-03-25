@@ -80,7 +80,7 @@ def get_reader(method: str, **kwargs) -> Reader:
         raise ValueError(f"Unknown reader method: {method}")
 
 
-def compute_layerwise_score(
+def compute_score_per_layer(
     activations: Activations,
     method: str = "difference_in_mean",
     pool_method: PoolMethod = "all",
@@ -90,7 +90,7 @@ def compute_layerwise_score(
     """Train a given reader per layer on activations, differentiating safe vs. unsafe inputs."""
     readers = []
 
-    for layer_idx in tqdm(activations.layers, desc="Training layer-wise reader"):
+    for layer_idx in tqdm(activations.layers, desc="Training reader per layer"):
         # Aggregate activations and labels across all samples for the current layer
         samples = activations.get_per_layer(
             layer_idx=layer_idx,
@@ -117,7 +117,7 @@ def compute_layerwise_score(
     return readers
 
 
-def plot_layerwise_score(
+def plot_score_per_layer(
     activations: Activations,
     readers: list[Reader],
     pool_method: PoolMethod = "last",
@@ -135,7 +135,7 @@ def plot_layerwise_score(
 
     fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
 
-    for i, (layer_idx, reader) in enumerate(zip(tqdm(activations.layers, desc="Plotting layer-wise scores"), readers)):
+    for i, (layer_idx, reader) in enumerate(zip(tqdm(activations.layers, desc="Plotting scores per layer"), readers)):
         row = (i // ncols) + 1
         col = (i % ncols) + 1
 
@@ -175,7 +175,7 @@ def plot_layerwise_score(
     fig.update_layout(
         height=300 * nrows,
         width=300 * ncols,
-        title_text=f"Layer-wise Concept Scores (pool='{pool_method}')",
+        title_text=f"Scores per layer (pool='{pool_method}')",
         showlegend=False,
         hovermode="closest",
     )
