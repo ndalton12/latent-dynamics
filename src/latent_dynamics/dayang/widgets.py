@@ -236,44 +236,46 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
 
     def __init__(self, **kwargs):
         # Set defaults
-        pool = kwargs.get("pool", "slice")
+        pool_method = kwargs.get("pool_method", "slice")
         pool_slice = kwargs.get("pool_slice", "-1::")
         exclude_bos = kwargs.get("exclude_bos", True)
-        exclude_special = kwargs.get("exclude_special", True)
+        exclude_special_tokens = kwargs.get("exclude_special_tokens", True)
 
         # Create widgets
         self.w_safe = widgets.SelectMultiple(description="Safe samples")
         self.w_unsafe = widgets.SelectMultiple(description="Unsafe samples")
-        self.w_pool = widgets.Dropdown(
-            options=["all", "first", "mid", "last", "mean", "slice"], value=pool, description="Tokens"
+        self.w_pool_method = widgets.Dropdown(
+            options=["all", "first", "mid", "last", "mean", "slice"], value=pool_method, description="Tokens"
         )
         self.w_pool_slice = widgets.Text(value=pool_slice, description="Slice")
         self.w_exclude_bos = widgets.Checkbox(value=exclude_bos, description="Exclude BOS token")
-        self.w_exclude_special = widgets.Checkbox(value=exclude_special, description="Exclude special tokens")
+        self.w_exclude_special_tokens = widgets.Checkbox(
+            value=exclude_special_tokens, description="Exclude special tokens"
+        )
 
         super().__init__(
             children=[
                 self.w_safe,
                 self.w_unsafe,
-                self.w_pool,
+                self.w_pool_method,
                 self.w_pool_slice,
                 self.w_exclude_bos,
-                self.w_exclude_special,
+                self.w_exclude_special_tokens,
             ]
         )
 
         # Register handlers
-        self.w_pool.observe(self._update_pool_slice, names="value")
+        self.w_pool_method.observe(self._update_pool_slice, names="value")
         self._update_pool_slice()
 
-        self.w_exclude_special.observe(self._update_value, names="value")
+        self.w_exclude_special_tokens.observe(self._update_value, names="value")
         for w in [
             self.w_safe,
             self.w_unsafe,
-            self.w_pool,
+            self.w_pool_method,
             self.w_pool_slice,
             self.w_exclude_bos,
-            self.w_exclude_special,
+            self.w_exclude_special_tokens,
         ]:
             w.observe(self._update_value, names="value")
 
@@ -281,7 +283,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         self.value = not self.value
 
     def _update_pool_slice(self, *args):
-        if self.w_pool.value == "slice":
+        if self.w_pool_method.value == "slice":
             self.w_pool_slice.layout.display = None  # show the widget
         else:
             self.w_pool_slice.layout.display = "none"  # hide the widget
@@ -289,8 +291,8 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
     def set_activations(self, activations: Activations):
         samples_safe = activations.samples[activations.samples["is_safe"]].index.tolist()
         samples_unsafe = activations.samples[~activations.samples["is_safe"]].index.tolist()
-        self.w_safe.options = samples_safe
-        self.w_unsafe.options = samples_unsafe
+        self.w_safe.options = [(f"{i + 1}: {sample_idx}", sample_idx) for i, sample_idx in enumerate(samples_safe)]
+        self.w_unsafe.options = [(f"{i + 1}: {sample_idx}", sample_idx) for i, sample_idx in enumerate(samples_unsafe)]
         self.w_safe.value = ()
         self.w_unsafe.value = ()
 
@@ -300,10 +302,10 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
 
     @property
     def pool_method(self) -> PoolMethod:
-        if self.w_pool.value == "slice":
+        if self.w_pool_method.value == "slice":
             return _str_to_slice(self.w_pool_slice.value)
         else:
-            return self.w_pool.value
+            return self.w_pool_method.value
 
     @property
     def exclude_bos(self) -> bool:
@@ -311,4 +313,4 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
 
     @property
     def exclude_special_tokens(self) -> bool | list[str]:
-        return self.w_exclude_special.value
+        return self.w_exclude_special_tokens.value
