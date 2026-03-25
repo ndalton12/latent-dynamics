@@ -106,6 +106,11 @@ def get_token_groups(tokenizer: PreTrainedTokenizerBase) -> dict[str, list[int]]
             "html": list(range(168, 238)),
             "special": list(range(0, 6)) + [105, 106] + [255999, 256000],
         }
+    elif tokenizer_id == "Qwen2Tokenizer_151643":
+        return {
+            "common": list(range(0, 151643)),
+            "special": list(range(151643, 151669)),
+        }
     else:
         raise ValueError(f"Unknown tokenizer {tokenizer_id}. Please define token groups for this tokenizer.")
 
