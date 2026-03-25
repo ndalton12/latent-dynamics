@@ -124,6 +124,14 @@ class Activations:
     topk: dict[int, dict[str, TopK]] = field(default_factory=dict)  # layer_idx -> sample_id -> topk
 
     @property
+    def samples_safe(self) -> pd.DataFrame:
+        return self.samples[self.samples["is_safe"]]
+
+    @property
+    def samples_unsafe(self) -> pd.DataFrame:
+        return self.samples[~self.samples["is_safe"]]
+
+    @property
     def num_samples(self) -> int:
         return len(self.samples)
 
