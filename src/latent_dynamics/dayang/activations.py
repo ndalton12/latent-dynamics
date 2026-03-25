@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
 from typing import Any, Literal
 
@@ -408,6 +410,41 @@ def _create_dataloader(
     return dataloader
 
 
+@contextlib.contextmanager
+def _capture_pre_norm(model):
+    """Context manager to capture last hidden state before layer norm in the model's forward pass."""
+    last_hidden_state_pre_norm = None
+
+    # Attach hook to capture the last hidden state before the final norm layer
+    def hook_fn(module, input):
+        nonlocal last_hidden_state_pre_norm
+        last_hidden_state_pre_norm = input[0]
+
+    base_model = getattr(model, model.base_model_prefix, model)
+    handle = base_model.norm.register_forward_pre_hook(hook_fn)
+
+    # Wrap the forward method to inject the captured pre-norm last hidden state
+    original_forward = model.forward
+
+    @wraps(original_forward)
+    def wrapped_forward(self, *args, **kwargs):
+        outputs = original_forward(*args, **kwargs)
+        if hasattr(outputs, "hidden_states") and outputs.hidden_states is not None:
+            outputs.hidden_states = (
+                outputs.hidden_states[:-1] + (last_hidden_state_pre_norm,) + outputs.hidden_states[-1:]
+            )
+        return outputs
+
+    model.forward = wrapped_forward.__get__(model, type(model))
+
+    try:
+        yield last_hidden_state_pre_norm
+    finally:
+        # Restore the original forward method and remove the hook
+        model.forward = original_forward
+        handle.remove()
+
+
 def extract_activations(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
@@ -420,8 +457,8 @@ def extract_activations(
 ) -> Activations:
     """Extract activations from the model for the given dataset."""
     if layers is None:
-        layers = list(range(model.config.num_hidden_layers + 1))
-    last_layer_idx = model.config.num_hidden_layers
+        layers = list(range(model.config.num_hidden_layers + 2))
+    last_layer_idx = model.config.num_hidden_layers + 1  # index of the last layer (after the final norm)
 
     # Prepare dataset
     dataset = _prepare_dataset(
@@ -448,11 +485,12 @@ def extract_activations(
         attention_mask = batch["attention_mask"].to(model.device)
 
         # Forward pass
-        outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-        )
+        with _capture_pre_norm(model):
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
 
         # Extract activations for each sample
         for i, sample_id in enumerate(batch["ids"]):
@@ -490,7 +528,7 @@ def extract_activations(
     print(
         f"Extracted activations for {num_samples} samples"
         f"\n  Number of tokens:     {num_tokens}"
-        f"\n  Number of layers:     {num_layers}"
+        f"\n  Number of layers:     {num_layers - 2} + 2"
         f"\n  Shape of activations: {hidden_size}"
         f"\n  Size of activations:  {num_bytes_acts / 1024 / 1024:.1f} MB"
         f"\nExtracted top-{k} next tokens for layer {last_layer_idx}"
