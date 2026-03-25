@@ -77,8 +77,8 @@ def _pool(
     # Pool activations
     if isinstance(pool_method, (slice | list)):
         activations = activations[pool_method]
-        tokens = tokens[pool_method]
-        token_positions = token_positions[pool_method]
+        tokens = tokens[pool_method].tolist()
+        token_positions = token_positions[pool_method].tolist()
         arrays = [array[pool_method] for array in arrays]
     elif pool_method == "mean":
         activations = activations.mean(axis=0, keepdims=True)
@@ -90,7 +90,7 @@ def _pool(
     else:
         raise ValueError(f"Unknown pool_method: '{pool_method}'")
 
-    return activations, tokens.tolist(), token_positions.tolist(), *arrays
+    return activations, tokens, token_positions, *arrays
 
 
 def _topk(logits: torch.Tensor, tokenizer: PreTrainedTokenizerBase, k: int = 10) -> TopK:
