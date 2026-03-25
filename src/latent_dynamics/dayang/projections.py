@@ -106,6 +106,23 @@ def get_tooltip_per_token(sample: dict, topk: int = 3, html: bool = False) -> li
     return text
 
 
+def get_tooltip_per_layer(sample: dict, i: int, k: int = 3, html: bool = False) -> list[str]:
+    """Create tooltip texts for each layer for a given sample."""
+    token = sample["tokens"][i]
+    token_pos = sample["token_positions"][i]
+    text = []
+    for layer_idx, topk_tokens, topk_probs in zip(sample["layers"], sample["topk"].tokens[i], sample["topk"].probs[i]):
+        text.append(
+            f"ID: {sample['id']}"
+            f"<br>Layer: {layer_idx}/{sample['activations'].shape[1] - 1}"
+            f"<br>Position: {i + 1}/{len(sample['tokens'])}"
+            f"<br>Token: '{escape_token(token, html=html)}'"
+            f"<br>Top-k: {topk_to_text(topk_tokens[:k], topk_probs[:k], html=html) if topk_tokens is not None else 'N/A'}"
+            f"<br><extra>{tokens_to_text(sample['tokens_all'], highlight=token_pos, html=html)}</extra>"
+        )
+    return text
+
+
 def compute_layerwise_pca(
     activations: Activations,
     pool_method: PoolMethod = "last",
@@ -347,3 +364,117 @@ def plot_token_embeddings(
         fig.show()
     else:
         raise ValueError(f"Unknown backend: '{backend}'")
+
+
+def plot_pca_per_token(
+    activations: Activations,
+    sample_id: str,
+    pool_method: PoolMethod = "all",
+    exclude_bos: bool = True,
+    exclude_special_tokens: bool | list[str] = True,
+    ncols: int = 5,
+    backend: Literal["matplotlib", "plotly"] = "plotly",
+    tokens_embeddings: tuple[list[str], np.array] | None = None,
+):
+    # Compute PCA
+    sample = activations.get_per_token(
+        sample_ids=sample_id,
+        pool_method=pool_method,
+        exclude_bos=exclude_bos,
+        exclude_special_tokens=exclude_special_tokens,
+    )
+    pca = PCA(n_components=2)
+    pca.fit(np.concatenate(sample["activations"]))
+    # Project token embeddings
+    if tokens_embeddings is not None:
+        tokens, embeddings = tokens_embeddings
+        embeddings_proj = pca.transform(embeddings)
+
+    nrows = math.ceil(len(sample["tokens"]) / ncols)
+    if backend == "matplotlib":
+        fig, axes = plt.subplots(
+            nrows=nrows, ncols=ncols, figsize=(4.2 * ncols, 3.6 * nrows), sharex=True, sharey=True, squeeze=False
+        )
+        axes = axes.flatten()
+        for i, (acts, token, token_pos) in enumerate(
+            zip(sample["activations"], sample["tokens"], sample["token_positions"])
+        ):
+            ax = axes[i]
+            # Plot token embeddings
+            if tokens_embeddings is not None:
+                ax.scatter(embeddings_proj[:, 0], embeddings_proj[:, 1], alpha=0.5, color="gray", s=10)
+            # Plot activations
+            activations_proj = pca.transform(acts)
+            ax.plot(
+                activations_proj[:, 0],
+                activations_proj[:, 1],
+                "-o",
+                markersize=3,
+            )
+            # Plot start and endpoint
+            ax.plot(
+                activations_proj[0, 0],
+                activations_proj[0, 1],
+                "o",
+                markersize=6,
+            )
+            ax.plot(
+                activations_proj[-1, 0],
+                activations_proj[-1, 1],
+                "^",
+                markersize=6,
+            )
+            # Annotate with layer indices
+            for layer_idx in range(sample["activations"].shape[1]):
+                ax.annotate(
+                    str(activations.layers[layer_idx]),
+                    (activations_proj[layer_idx, 0], activations_proj[layer_idx, 1]),
+                    textcoords="offset points",
+                    xytext=(0, 5),
+                    ha="center",
+                    fontsize=6,
+                )
+            ax.set_title(f"{token_pos}: {escape_token(token)}")
+    elif backend == "plotly":
+        fig = go.Figure()
+        # Plot token embeddings
+        if tokens_embeddings is not None:
+            fig.add_trace(
+                go.Scatter(
+                    x=embeddings_proj[:, 0],
+                    y=embeddings_proj[:, 1],
+                    mode="markers",
+                    marker=dict(size=4, color="gray", opacity=0.5),
+                    hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
+                    hovertext=[escape_token(token) for token in tokens],
+                    name="Embeddings",
+                )
+            )
+        # Plot activations
+        for i, (acts, token, token_pos) in enumerate(
+            zip(sample["activations"], sample["tokens"], sample["token_positions"])
+        ):
+            activations_proj = pca.transform(acts)
+            fig.add_trace(
+                go.Scatter(
+                    x=activations_proj[:, 0],
+                    y=activations_proj[:, 1],
+                    mode="lines+markers+text",
+                    marker=dict(size=6),
+                    text=[str(layer) for layer in activations.layers],
+                    textposition="top center",
+                    textfont=dict(size=6),
+                    hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
+                    hovertext=get_tooltip_per_layer(sample, i, html=True),
+                    name=f"{token_pos}: {escape_token(token)}",
+                )
+            )
+        fig.update_layout(
+            title=f"Tokenwise PCA: {sample_id}",
+            xaxis_title="PC1",
+            yaxis_title="PC2",
+            legend_title="Tokens",
+            width=1000,
+            height=800,
+        )
+        fig.show()

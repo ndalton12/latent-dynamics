@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import torch
 from IPython.display import display
@@ -116,3 +117,21 @@ def print_token_groups(tokenizer: PreTrainedTokenizerBase, token_groups: dict[st
                 }
             )
         )
+
+
+def get_token_embeddings(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    token_ids: list[int] | None,
+) -> tuple[list[str], np.array]:
+    if token_ids is None:
+        token_ids = list(range(len(tokenizer)))
+
+    tokens = tokenizer.convert_ids_to_tokens(token_ids)
+    embeddings = model.get_input_embeddings().weight.float().cpu().numpy()[token_ids]
+
+    if model.__class__.__name__.startswith("Gemma3"):
+        # Gemma3 models scale token embeddings by sqrt(hidden_size)
+        # reference: https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/gemma3/modeling_gemma3.py#L102
+        embeddings *= np.sqrt(model.config.hidden_size)
+    return tokens, embeddings
