@@ -92,22 +92,26 @@ def topk_to_text(topk_tokens: list[str], topk_probs: list[float], html: bool = F
 
 def get_tooltip_per_token(sample: dict, topk: int = 3, html: bool = False) -> list[str]:
     """Create tooltip texts for each token for a given sample."""
+    tokens_all = sample["tokens_all"]
+    tokens = sample["tokens"]
     text = []
     for i, (token, token_pos, topk_tokens, topk_probs) in enumerate(
         zip(sample["tokens"], sample["token_positions"], sample["topk"].tokens, sample["topk"].probs)
     ):
         text.append(
             f"ID: {sample['id']}"
-            f"<br>Position: {i + 1}/{len(sample['tokens'])}"
+            f"<br>Position: {token_pos + 1}/{len(tokens_all)} ({i + 1}/{len(tokens)})"
             f"<br>Token: '{escape_token(token, html=html)}'"
             f"<br>Top-k: {topk_to_text(topk_tokens[:topk], topk_probs[:topk], html=html) if topk_tokens is not None else 'N/A'}"
-            f"<br><extra>{tokens_to_text(sample['tokens_all'], highlight=token_pos, html=html)}</extra>"
+            f"<br><extra>{tokens_to_text(tokens_all, highlight=token_pos, html=html)}</extra>"
         )
     return text
 
 
 def get_tooltip_per_layer(sample: dict, i: int, k: int = 3, html: bool = False) -> list[str]:
     """Create tooltip texts for each layer for a given sample."""
+    tokens_all = sample["tokens_all"]
+    tokens = sample["tokens"]
     token = sample["tokens"][i]
     token_pos = sample["token_positions"][i]
     text = []
@@ -115,10 +119,10 @@ def get_tooltip_per_layer(sample: dict, i: int, k: int = 3, html: bool = False) 
         text.append(
             f"ID: {sample['id']}"
             f"<br>Layer: {layer_idx}/{sample['activations'].shape[1] - 1}"
-            f"<br>Position: {i + 1}/{len(sample['tokens'])}"
+            f"<br>Position: {token_pos + 1}/{len(tokens_all)} ({i + 1}/{len(tokens)})"
             f"<br>Token: '{escape_token(token, html=html)}'"
             f"<br>Top-k: {topk_to_text(topk_tokens[:k], topk_probs[:k], html=html) if topk_tokens is not None else 'N/A'}"
-            f"<br><extra>{tokens_to_text(sample['tokens_all'], highlight=token_pos, html=html)}</extra>"
+            f"<br><extra>{tokens_to_text(tokens_all, highlight=token_pos, html=html)}</extra>"
         )
     return text
 
@@ -239,7 +243,7 @@ def plot_pca_per_layer(
         for ax in axes[num_layers:]:
             ax.axis("off")
 
-        fig.suptitle(f"PCA Projections (pool='{pool_method}')")
+        fig.suptitle("PCA per layer")
         fig.tight_layout()
         plt.show()
     elif backend == "plotly":
@@ -300,7 +304,7 @@ def plot_pca_per_layer(
         fig.update_layout(
             height=300 * nrows,
             width=300 * ncols,
-            title_text=f"PCA Projections (pool='{pool_method}')",
+            title_text="PCA per layer",
             showlegend=False,
             hovermode="closest",
         )
@@ -377,7 +381,7 @@ def plot_pca_per_token(
                     ha="center",
                     fontsize=6,
                 )
-            ax.set_title(f"{token_pos}: {escape_token(token)}")
+            ax.set_title(f"{token_pos + 1}: {escape_token(token)}")
     elif backend == "plotly":
         fig = go.Figure()
         # Plot token embeddings
