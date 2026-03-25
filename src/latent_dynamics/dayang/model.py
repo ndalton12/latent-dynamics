@@ -96,8 +96,8 @@ def load_model_and_tokenizer(
 
 
 def get_token_groups(tokenizer: PreTrainedTokenizerBase) -> dict[str, list[int]]:
-    tokenizer_id = f"{tokenizer.__class__.__name__}_{len(tokenizer)}"
-    if tokenizer_id == "GemmaTokenizer_262145":
+    tokenizer_id = f"{tokenizer.__class__.__name__}_{tokenizer.vocab_size}"
+    if tokenizer_id == "GemmaTokenizer_262144":
         return {
             "common": list(range(494, 255968)),
             "unused": list(range(6, 105)) + list(range(256001, 262144)),
@@ -126,10 +126,10 @@ def print_token_groups(tokenizer: PreTrainedTokenizerBase, token_groups: dict[st
 def get_token_embeddings(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
-    token_ids: list[int] | None,
+    token_ids: list[int] | None = None,
 ) -> tuple[list[str], np.array]:
     if token_ids is None:
-        token_ids = list(range(len(tokenizer)))
+        token_ids = list(range(tokenizer.vocab_size))
 
     tokens = tokenizer.convert_ids_to_tokens(token_ids)
     embeddings = model.get_input_embeddings().weight.cpu().float().numpy()[token_ids]
