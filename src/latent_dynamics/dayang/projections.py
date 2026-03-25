@@ -94,7 +94,7 @@ def get_tooltip_per_token(sample: dict, topk: int = 3, html: bool = False) -> li
     """Create tooltip texts for each token for a given sample."""
     text = []
     for i, (token, token_pos, topk_tokens, topk_probs) in enumerate(
-        zip(sample["tokens"], sample["token_positions"], sample["topk_tokens"], sample["topk_probs"])
+        zip(sample["tokens"], sample["token_positions"], sample["topk"].tokens, sample["topk"].probs)
     ):
         text.append(
             f"ID: {sample['id']}"
