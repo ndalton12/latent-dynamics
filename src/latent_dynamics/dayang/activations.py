@@ -231,8 +231,8 @@ class Activations:
                     exclude_bos=exclude_bos,
                     exclude_special_tokens=exclude_special_tokens,
                 )
-                topk_tokens = np.full(tokens, None)
-                topk_probs = np.full(tokens, None)
+                topk_tokens = np.full(len(tokens), None)
+                topk_probs = np.full(len(tokens), None)
             topk = TopK(tokens=topk_tokens, probs=topk_probs)
             sample["tokens_all"] = sample.pop("tokens")  # rename since key used for pooled tokens
             return {
