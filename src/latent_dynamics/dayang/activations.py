@@ -330,10 +330,10 @@ def _prepare_sample(
     apply_chat_template: bool = False,
 ) -> dict[str, str]:
     # Create conversation messages
-    messages = [{"role": "user", "content": [{"type": "text", "text": sample["prompt"]}]}]
+    messages = [{"role": "user", "content": sample["prompt"]}]
     if include_response:
         response = sample["response"] if isinstance(include_response, bool) else include_response
-        messages.append({"role": "assistant", "content": [{"type": "text", "text": response}]})
+        messages.append({"role": "assistant", "content": response})
     # Format messages into input string
     if apply_chat_template:
         input = tokenizer.apply_chat_template(
