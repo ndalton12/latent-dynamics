@@ -180,6 +180,7 @@ def plot_pca_per_layer(
     pool_method: PoolMethod = "last",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
+    tokens_embeddings: tuple[list[str], np.array] | None = None,
     ncols: int = 5,
     backend: Literal["matplotlib", "plotly"] = "plotly",
 ) -> None:
@@ -253,6 +254,25 @@ def plot_pca_per_layer(
             row = (i // ncols) + 1
             col = (i % ncols) + 1
 
+            if tokens_embeddings is not None and layer_idx in [0, max(activations.layers)]:
+                # Project token embeddings
+                tokens, embeddings = tokens_embeddings
+                embeddings_proj = pca.transform(embeddings)
+                # Plot token embeddings
+                fig.add_trace(
+                    go.Scatter(
+                        x=embeddings_proj[:, 0],
+                        y=embeddings_proj[:, 1],
+                        mode="markers",
+                        marker=dict(size=4, color="gray", opacity=0.5),
+                        hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
+                        hovertext=[escape_token(token) for token in tokens],
+                        name="Embeddings",
+                    ),
+                    row=row,
+                    col=col,
+                )
+
             samples = activations.get_per_layer(
                 layer_idx=layer_idx,
                 pool_method=pool_method,
@@ -291,6 +311,7 @@ def plot_pca_per_layer(
                             y=[activations_proj[0, 1], activations_proj[-1, 1]],
                             mode="markers",
                             marker=dict(color=color, size=6, symbol=["circle", "triangle-up"]),
+                            opacity=0.5,
                             hoverinfo="skip",
                             showlegend=False,
                         ),
@@ -318,9 +339,9 @@ def plot_pca_per_token(
     pool_method: PoolMethod = "all",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
+    tokens_embeddings: tuple[list[str], np.array] | None = None,
     ncols: int = 5,
     backend: Literal["matplotlib", "plotly"] = "plotly",
-    tokens_embeddings: tuple[list[str], np.array] | None = None,
     colorby: Literal["auto", "token", "sample", "is_safe"] | None = "auto",
     showlegend: Literal["auto"] | bool = "auto",
 ):

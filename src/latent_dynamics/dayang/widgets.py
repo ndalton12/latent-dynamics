@@ -335,7 +335,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
 
 class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
-    token_embeddings: tuple[list[str], np.array] | None = None
+    tokens_embeddings: tuple[list[str], np.array] | None = None
 
     def __init__(self, out: widgets.Output | None = None, **kwargs):
         models = list(MODEL_REGISTRY.keys())
@@ -360,7 +360,7 @@ class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.Descr
         self.btn_extract.on_click(self._do_extract)
 
     def _update_value(self, token_embeddings: tuple[list[str], np.array] | None):
-        self.token_embeddings = token_embeddings
+        self.tokens_embeddings = token_embeddings
         self.value = not self.value
 
     @contextlib.contextmanager
