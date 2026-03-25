@@ -9,7 +9,7 @@ from traitlets import Bool
 from latent_dynamics.dayang.activations import Activations, PoolMethod, extract_activations
 from latent_dynamics.dayang.data import DATASET_REGISTRY, load_dataset_from_spec
 from latent_dynamics.dayang.model import MODEL_REGISTRY, get_token_embeddings, load_model_and_tokenizer
-from latent_dynamics.dayang.projections import choice
+from latent_dynamics.dayang.utils import choice
 
 
 def _str_to_slice(s: str) -> slice | None:

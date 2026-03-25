@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from tqdm.auto import tqdm
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod
-from latent_dynamics.dayang.projections import get_tooltip_per_token
+from latent_dynamics.dayang.utils import get_tooltip_per_token
 
 
 class Reader(ABC):
