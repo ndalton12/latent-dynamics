@@ -257,8 +257,28 @@ def plot_pca_per_layer(
         raise ValueError(f"Unknown backend: '{backend}'")
 
 
+def compute_pca_per_token(
+    activations: Activations,
+    pool_method: PoolMethod = "all",
+    exclude_bos: bool = True,
+    exclude_special_tokens: bool | list[str] = True,
+) -> PCA:
+    """Compute PCA for each token across all layers and samples."""
+    samples = activations.get_per_token(
+        pool_method=pool_method,
+        exclude_bos=exclude_bos,
+        exclude_special_tokens=exclude_special_tokens,
+    )
+    acts = np.concatenate([sample["activations"] for sample in samples])
+    acts = acts.reshape(-1, acts.shape[-1])  # (num_tokens * num_layers, hidden_size)
+    pca = PCA(n_components=2)
+    pca.fit(acts)
+    return pca
+
+
 def plot_pca_per_token(
     activations: Activations,
+    pca: PCA,
     pool_method: PoolMethod = "all",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
@@ -285,11 +305,6 @@ def plot_pca_per_token(
     if showlegend == "auto":
         showlegend = len(samples) <= 5
 
-    # Compute PCA
-    acts = np.concatenate([sample["activations"] for sample in samples])
-    acts = acts.reshape(-1, acts.shape[-1])  # (num_tokens * num_layers, hidden_size)
-    pca = PCA(n_components=2)
-    pca.fit(acts)
     # Project token embeddings
     if tokens_embeddings is not None:
         tokens, embeddings = tokens_embeddings
