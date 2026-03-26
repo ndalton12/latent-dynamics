@@ -23,6 +23,10 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         path="google/gemma-3-270m-it",
         dtype="bfloat16",
     ),
+    "gemma3_1b": ModelSpec(
+        path="google/gemma-3-1b-it",
+        dtype="bfloat16",
+    ),
     "gemma3_4b": ModelSpec(
         path="google/gemma-3-4b-it",
         dtype="bfloat16",
