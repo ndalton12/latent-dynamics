@@ -347,8 +347,9 @@ class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.Descr
         self.w_model = widgets.Dropdown(options=models, value=model, description="Model")
         self.w_max_tokens = widgets.IntText(value=10000, min=1, description="Max tokens")
         self.btn_extract = widgets.Button(description="Load token embeddings", button_style="primary")
+        self.btn_clear = widgets.Button(description="Clear token embeddings", button_style="danger")
 
-        children = [self.w_model, self.w_max_tokens, self.btn_extract]
+        children = [self.w_model, self.w_max_tokens, widgets.HBox([self.btn_extract, self.btn_clear])]
         if out is None:
             self.out = widgets.Output()
             children.append(self.out)
@@ -358,6 +359,7 @@ class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.Descr
 
         # Register handlers
         self.btn_extract.on_click(self._do_extract)
+        self.btn_clear.on_click(self._do_clear)
 
     def _update_value(self, token_embeddings: tuple[list[str], np.array] | None):
         self.tokens_embeddings = token_embeddings
@@ -379,6 +381,13 @@ class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.Descr
             token_ids = choice(range(tokenizer.vocab_size), at_most=self.max_tokens)
             token_embeddings = get_token_embeddings(model, tokenizer, token_ids=token_ids)
             self._update_value(token_embeddings)
+
+    def _do_clear(self, *args):
+        with self._update_buttons(), self.out:
+            self.out.clear_output(wait=True)
+
+            self._update_value(None)
+            print("Cleared token embeddings.")
 
     @property
     def model_name(self) -> str:
