@@ -253,9 +253,9 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         self.w_safe = widgets.SelectMultiple(description="Safe samples")
         self.w_unsafe = widgets.SelectMultiple(description="Unsafe samples")
         self.w_pool_method = widgets.Dropdown(
-            options=["all", "first", "mid", "last", "mean", "index", "slice"], value=pool_method, description="Tokens"
+            options=["all", "indices", "slice", "first", "mid", "last", "mean"], value=pool_method, description="Tokens"
         )
-        self.w_pool_index = widgets.Text(value=pool_index, description="Index")
+        self.w_pool_indices = widgets.Text(value=pool_index, description="Indices")
         self.w_pool_slice = widgets.Text(value=pool_slice, description="Slice")
         self.w_exclude_bos = widgets.Checkbox(value=exclude_bos, description="Exclude BOS token")
         self.w_exclude_special_tokens = widgets.Checkbox(
@@ -267,7 +267,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
                 self.w_safe,
                 self.w_unsafe,
                 self.w_pool_method,
-                self.w_pool_index,
+                self.w_pool_indices,
                 self.w_pool_slice,
                 self.w_exclude_bos,
                 self.w_exclude_special_tokens,
@@ -283,7 +283,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
             self.w_safe,
             self.w_unsafe,
             self.w_pool_method,
-            self.w_pool_index,
+            self.w_pool_indices,
             self.w_pool_slice,
             self.w_exclude_bos,
             self.w_exclude_special_tokens,
@@ -298,10 +298,10 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
             self.w_pool_slice.layout.display = None  # show the widget
         else:
             self.w_pool_slice.layout.display = "none"  # hide the widget
-        if self.w_pool_method.value == "index":
-            self.w_pool_index.layout.display = None  # show the widget
+        if self.w_pool_method.value == "indices":
+            self.w_pool_indices.layout.display = None  # show the widget
         else:
-            self.w_pool_index.layout.display = "none"  # hide the widget
+            self.w_pool_indices.layout.display = "none"  # hide the widget
 
     def set_activations(self, activations: Activations):
         samples_safe = activations.samples[activations.samples["is_safe"]].index.tolist()
@@ -317,8 +317,8 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
 
     @property
     def pool_method(self) -> PoolMethod:
-        if self.w_pool_method.value == "index":
-            return int(self.w_pool_index.value)
+        if self.w_pool_method.value == "indices":
+            return list(map(int, self.w_pool_indices.value.split(",")))
         elif self.w_pool_method.value == "slice":
             return _str_to_slice(self.w_pool_slice.value)
         else:
