@@ -351,7 +351,7 @@ def _prepare_sample(
             tokenize=False,
         )
     else:
-        input = "\n\n".join(message["content"][0]["text"] for message in messages)
+        input = "\n\n".join(message["content"] for message in messages)
     return {"input": input}
 
 
