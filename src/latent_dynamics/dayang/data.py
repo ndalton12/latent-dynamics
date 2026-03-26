@@ -66,6 +66,55 @@ SORRY_BENCH_CATEGORY_DESCRIPTIONS = [
 
 
 DATASET_REGISTRY: dict[str, DatasetSpec] = {
+    "beavertails30k/train": DatasetSpec(
+        path="PKU-Alignment/BeaverTails",
+        split="30k_train",
+        map_fn=lambda sample, i: {
+            "id": f"beavertails30k/train/{i}",
+            **sample,
+            "is_adversarial": False,
+        },
+    ),
+    "beavertails30k/test": DatasetSpec(
+        path="PKU-Alignment/BeaverTails",
+        split="30k_test",
+        map_fn=lambda sample, i: {
+            "id": f"beavertails30k/test/{i}",
+            **sample,
+            "is_adversarial": False,
+        },
+    ),
+    "beavertails330k/train": DatasetSpec(
+        path="PKU-Alignment/BeaverTails",
+        split="330k_train",
+        map_fn=lambda sample, i: {
+            "id": f"beavertails330k/train/{i}",
+            **sample,
+            "is_adversarial": False,
+        },
+    ),
+    "beavertails330k/test": DatasetSpec(
+        path="PKU-Alignment/BeaverTails",
+        split="330k_test",
+        map_fn=lambda sample, i: {
+            "id": f"beavertails330k/test/{i}",
+            **sample,
+            "is_adversarial": False,
+        },
+    ),
+    "sorry_bench": DatasetSpec(
+        path="sorry-bench/sorry-bench-202503",
+        split="train",
+        filter_fn=lambda sample: sample["turns"][0] is not None,  # filter out samples with null prompts
+        map_fn=lambda sample, i: {
+            "id": f"sorry_bench/{sample['question_id']}",
+            "prompt": sample["turns"][0],
+            "is_safe": False,
+            "is_adversarial": False,
+            "prompt_category": SORRY_BENCH_CATEGORY_DESCRIPTIONS[int(sample["category"]) - 1],
+            "prompt_style": sample["prompt_style"],
+        },
+    ),
     "wildjailbreak/train/vanilla": DatasetSpec(
         path="allenai/wildjailbreak",
         name="train",
@@ -104,55 +153,6 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
             "prompt": sample["adversarial"],
             "is_safe": sample["data_type"] == "adversarial_benign",
             "is_adversarial": True,
-        },
-    ),
-    "beavertails330k/train": DatasetSpec(
-        path="PKU-Alignment/BeaverTails",
-        split="330k_train",
-        map_fn=lambda sample, i: {
-            "id": f"beavertails330k/train/{i}",
-            **sample,
-            "is_adversarial": False,
-        },
-    ),
-    "beavertails330k/test": DatasetSpec(
-        path="PKU-Alignment/BeaverTails",
-        split="330k_test",
-        map_fn=lambda sample, i: {
-            "id": f"beavertails330k/test/{i}",
-            **sample,
-            "is_adversarial": False,
-        },
-    ),
-    "beavertails30k/train": DatasetSpec(
-        path="PKU-Alignment/BeaverTails",
-        split="30k_train",
-        map_fn=lambda sample, i: {
-            "id": f"beavertails30k/train/{i}",
-            **sample,
-            "is_adversarial": False,
-        },
-    ),
-    "beavertails30k/test": DatasetSpec(
-        path="PKU-Alignment/BeaverTails",
-        split="30k_test",
-        map_fn=lambda sample, i: {
-            "id": f"beavertails30k/test/{i}",
-            **sample,
-            "is_adversarial": False,
-        },
-    ),
-    "sorry_bench": DatasetSpec(
-        path="sorry-bench/sorry-bench-202503",
-        split="train",
-        filter_fn=lambda sample: sample["turns"][0] is not None,  # filter out samples with null prompts
-        map_fn=lambda sample, i: {
-            "id": f"sorry_bench/{sample['question_id']}",
-            "prompt": sample["turns"][0],
-            "is_safe": False,
-            "is_adversarial": False,
-            "prompt_category": SORRY_BENCH_CATEGORY_DESCRIPTIONS[int(sample["category"]) - 1],
-            "prompt_style": sample["prompt_style"],
         },
     ),
     "xstest": DatasetSpec(
