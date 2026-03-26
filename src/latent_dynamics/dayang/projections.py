@@ -493,7 +493,7 @@ def plot_token_embeddings(
             df,
             dimensions=[f"PC{i + 1}" for i in range(num_components)],
             color="token_group",
-            hover_data="token",
+            hover_data=["token_group", "token"],
             opacity=0.5,
         )
         fig.update_traces(diagonal_visible=False, marker_size=3)
