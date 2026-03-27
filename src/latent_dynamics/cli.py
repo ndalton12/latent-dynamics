@@ -880,6 +880,192 @@ def plot_active_learning_figures_cmd(
         typer.echo(f"  pdf: {paths['pdf']}")
 
 
+@app.command("run-contrastive-probe")
+def run_contrastive_probe_cmd(
+    activations_root: Annotated[
+        Path,
+        typer.Option(
+            help=(
+                "Activation root or layer leaf. For multi-layer runs, point to a "
+                "directory containing layer_* subdirectories."
+            )
+        ),
+    ] = Path("activations/wildjailbreak/gemma3_4b"),
+    layer: Annotated[
+        List[int],
+        typer.Option(
+            help="Layer index (repeat for multiple layers: --layer 7 --layer 34)."
+        ),
+    ] = [],
+    pooling: Annotated[
+        PoolingMode,
+        typer.Option(help="Token pooling method for trajectory -> feature vector."),
+    ] = PoolingMode.last,
+    label_field: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Metadata label field for downstream binary probe "
+                "(default: judge_unsafe_labels). "
+                "Use 'auto' to try judge_unsafe_labels, labels, then judge_compliance_labels."
+            )
+        ),
+    ] = "judge_unsafe_labels",
+    prompt_subset: Annotated[
+        PromptSubsetMode,
+        typer.Option(
+            help=(
+                "Limit examples by prompt group from metadata example_metadata.data_type. "
+                "Use all, vanilla, or adversarial."
+            )
+        ),
+    ] = PromptSubsetMode.all,
+    train_prompt_subset: Annotated[
+        PromptSubsetMode,
+        typer.Option(
+            help=(
+                "Subset used for train+val split construction. "
+                "Applied after --prompt-subset filtering."
+            )
+        ),
+    ] = PromptSubsetMode.all,
+    test_prompt_subset: Annotated[
+        PromptSubsetMode,
+        typer.Option(
+            help=(
+                "Subset used for final held-out test split. "
+                "Applied after --prompt-subset filtering."
+            )
+        ),
+    ] = PromptSubsetMode.all,
+    max_examples: Annotated[
+        Optional[int],
+        typer.Option(
+            help="Optional cap on number of examples (uses first N examples)."
+        ),
+    ] = None,
+    test_size: Annotated[
+        float,
+        typer.Option(help="Held-out test split fraction."),
+    ] = 0.2,
+    val_size: Annotated[
+        float,
+        typer.Option(help="Validation split fraction of the train+val pool."),
+    ] = 0.1,
+    hidden_dim: Annotated[
+        int,
+        typer.Option(help="Hidden dimension of the contrastive MLP."),
+    ] = 256,
+    embedding_dim: Annotated[
+        int,
+        typer.Option(help="Output embedding dimension of the contrastive MLP."),
+    ] = 64,
+    dropout: Annotated[
+        float,
+        typer.Option(help="Dropout rate in the contrastive MLP."),
+    ] = 0.1,
+    temperature: Annotated[
+        float,
+        typer.Option(help="Temperature for supervised contrastive loss."),
+    ] = 0.07,
+    learning_rate: Annotated[
+        float,
+        typer.Option(help="AdamW learning rate for contrastive encoder."),
+    ] = 1e-3,
+    weight_decay: Annotated[
+        float,
+        typer.Option(help="AdamW weight decay for contrastive encoder."),
+    ] = 1e-4,
+    batch_size: Annotated[
+        int,
+        typer.Option(help="Minibatch size for contrastive training."),
+    ] = 128,
+    max_epochs: Annotated[
+        int,
+        typer.Option(help="Maximum number of epochs for contrastive training."),
+    ] = 100,
+    patience: Annotated[
+        int,
+        typer.Option(help="Early-stopping patience on validation loss."),
+    ] = 10,
+    seed: Annotated[
+        int,
+        typer.Option(help="Random seed for split construction and model training."),
+    ] = 42,
+    output_json: Annotated[
+        Path,
+        typer.Option(help="Where to write the contrastive-probe report JSON."),
+    ] = Path("results/contrastive_probe_report.json"),
+) -> None:
+    """Train a supervised-contrastive head on frozen activations and compare against a raw logistic baseline."""
+    from latent_dynamics.learning_experiment import (
+        ContrastiveProbeConfig,
+        load_activation_feature_bundle,
+        run_contrastive_probe_experiment,
+    )
+
+    selected_layers = layer if layer else None
+    bundle = load_activation_feature_bundle(
+        root_or_leaf=activations_root,
+        layers=selected_layers,
+        pooling=pooling.value,
+        label_field=label_field,
+        prompt_subset=prompt_subset.value,
+        max_examples=max_examples,
+    )
+    group_counts: str | None = None
+    if bundle.prompt_groups is not None:
+        unique_groups, group_sizes = np.unique(bundle.prompt_groups, return_counts=True)
+        group_counts = ", ".join(
+            f"{str(g)}={int(c)}"
+            for g, c in zip(unique_groups.tolist(), group_sizes.tolist(), strict=False)
+        )
+    typer.echo(
+        f"Loaded activation features: n={bundle.labels.shape[0]} "
+        f"layers={bundle.layers} label_field={bundle.label_field} "
+        f"prompt_subset={bundle.prompt_subset} "
+        f"train_prompt_subset={train_prompt_subset.value} "
+        f"test_prompt_subset={test_prompt_subset.value}"
+    )
+    if group_counts is not None:
+        typer.echo(f"Prompt groups in selection: {group_counts}")
+
+    cfg = ContrastiveProbeConfig(
+        test_size=test_size,
+        val_size=val_size,
+        random_state=seed,
+        hidden_dim=hidden_dim,
+        embedding_dim=embedding_dim,
+        dropout=dropout,
+        temperature=temperature,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        batch_size=batch_size,
+        max_epochs=max_epochs,
+        patience=patience,
+        train_prompt_subset=train_prompt_subset.value,
+        test_prompt_subset=test_prompt_subset.value,
+    )
+    result = run_contrastive_probe_experiment(bundle=bundle, config=cfg)
+    payload = result.to_dict()
+
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(payload, indent=2))
+
+    for layer_key in payload["per_layer"]:
+        layer_payload = payload["per_layer"][layer_key]
+        raw_metrics = layer_payload["raw_probe"]
+        contrastive_metrics = layer_payload["contrastive_probe"]
+        typer.echo(
+            f"layer={layer_key}: "
+            f"raw_acc={raw_metrics['accuracy']:.3f} "
+            f"raw_auroc={raw_metrics['auroc'] if raw_metrics['auroc'] is not None else 'n/a'} "
+            f"contrastive_acc={contrastive_metrics['accuracy']:.3f} "
+            f"contrastive_auroc={contrastive_metrics['auroc'] if contrastive_metrics['auroc'] is not None else 'n/a'}"
+        )
+    typer.echo(f"Wrote report: {output_json}")
+
+
 @app.command("run-safety-pipeline")
 def run_safety_pipeline(
     activations: Annotated[

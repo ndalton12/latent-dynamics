@@ -720,9 +720,7 @@ def _indices_for_subset(
     if subset == "all":
         return np.arange(n_total, dtype=np.int64)
     if prompt_groups is None:
-        raise ValueError(
-            f"prompt_groups missing, cannot filter subset '{subset}'."
-        )
+        raise ValueError(f"prompt_groups missing, cannot filter subset '{subset}'.")
     if prompt_groups.shape[0] != n_total:
         raise ValueError(
             "prompt_groups length does not match labels length. "
@@ -781,7 +779,9 @@ def make_active_learning_split(
         n_total=n,
     )
     if train_candidates.size == 0:
-        raise ValueError(f"No examples available for train_prompt_subset='{train_prompt_subset}'.")
+        raise ValueError(
+            f"No examples available for train_prompt_subset='{train_prompt_subset}'."
+        )
 
     test_candidates = _indices_for_subset(
         prompt_groups=bundle.prompt_groups,
@@ -789,7 +789,9 @@ def make_active_learning_split(
         n_total=n,
     )
     if test_candidates.size == 0:
-        raise ValueError(f"No examples available for test_prompt_subset='{test_prompt_subset}'.")
+        raise ValueError(
+            f"No examples available for test_prompt_subset='{test_prompt_subset}'."
+        )
 
     desired_test_count = int(round(float(test_size) * float(test_candidates.shape[0])))
     desired_test_count = max(1, desired_test_count)
@@ -832,7 +834,8 @@ def make_active_learning_split(
     initial_labeled_idx, unlabeled_pool_idx = _safe_train_test_split(
         indices=train_pool_indices,
         labels=train_pool_labels,
-        test_size=1.0 - float(initial_labeled_size) / float(train_pool_indices.shape[0]),
+        test_size=1.0
+        - float(initial_labeled_size) / float(train_pool_indices.shape[0]),
         random_state=random_state + 1,
     )
     initial_labeled_idx, unlabeled_pool_idx = _ensure_two_class_labeled_set(
@@ -960,7 +963,9 @@ def run_active_learning_experiment_with_split(
             )
             dynamic_score_map = {
                 int(idx): float(score)
-                for idx, score in zip(pool_idx.tolist(), dynamic_scores.tolist(), strict=False)
+                for idx, score in zip(
+                    pool_idx.tolist(), dynamic_scores.tolist(), strict=False
+                )
             }
 
             top_k_overlap: float | None = None
@@ -972,17 +977,23 @@ def run_active_learning_experiment_with_split(
             if prev_dynamic_rank_order is not None:
                 shared_set = set(pool_idx.tolist())
                 prev_filtered = [
-                    int(idx) for idx in prev_dynamic_rank_order.tolist() if int(idx) in shared_set
+                    int(idx)
+                    for idx in prev_dynamic_rank_order.tolist()
+                    if int(idx) in shared_set
                 ]
                 curr_filtered = dynamic_rank_order.tolist()
                 shared_pool_size = int(len(curr_filtered))
 
                 if curr_filtered and prev_filtered:
-                    k_top = int(min(config.batch_size, len(curr_filtered), len(prev_filtered)))
+                    k_top = int(
+                        min(config.batch_size, len(curr_filtered), len(prev_filtered))
+                    )
                     if k_top > 0:
                         prev_top = set(prev_filtered[:k_top])
                         curr_top = set(curr_filtered[:k_top])
-                        top_k_overlap = float(len(prev_top.intersection(curr_top)) / k_top)
+                        top_k_overlap = float(
+                            len(prev_top.intersection(curr_top)) / k_top
+                        )
 
                 spearman_rho, _shared_n = _spearman_rank_corr(
                     prev_order=prev_filtered,
@@ -1000,7 +1011,9 @@ def run_active_learning_experiment_with_split(
                             abs(dynamic_score_map[idx] - prev_dynamic_score_map[idx])
                             for idx in shared_scored
                         ]
-                        score_drift_mae = float(np.mean(np.asarray(diffs, dtype=np.float64)))
+                        score_drift_mae = float(
+                            np.mean(np.asarray(diffs, dtype=np.float64))
+                        )
 
             ranking_stability = {
                 "top_k_overlap_at_k": top_k_overlap,
@@ -1121,7 +1134,9 @@ def run_active_learning_experiment_with_split(
                 if prev_dynamic_selected is None:
                     ranking_stability["selected_set_turnover"] = None
                 else:
-                    prev_selected_set = set(int(x) for x in prev_dynamic_selected.tolist())
+                    prev_selected_set = set(
+                        int(x) for x in prev_dynamic_selected.tolist()
+                    )
                     retained = len(selected_set.intersection(prev_selected_set))
                     ranking_stability["selected_set_turnover"] = float(
                         1.0 - (retained / len(selected_set))

@@ -29,6 +29,7 @@ class ActivationFeatureBundle:
     root: Path
     layer_dirs: dict[int, Path]
     prompt_groups: np.ndarray | None
+    example_families: np.ndarray | None
     prompt_subset: str
     example_indices: np.ndarray
     n_total_examples: int
@@ -150,6 +151,28 @@ def _extract_prompt_groups(
         [_bucket_prompt_group(example_metadata[int(i)]) for i in selected_indices],
         dtype=object,
     )
+
+
+def _extract_example_families(
+    metadata: dict[str, Any],
+    selected_indices: np.ndarray,
+) -> np.ndarray | None:
+    example_metadata = metadata.get("example_metadata")
+    if not isinstance(example_metadata, list):
+        return None
+    if not example_metadata:
+        return None
+
+    families: list[str] = []
+    for idx in selected_indices:
+        row = example_metadata[int(idx)]
+        if not isinstance(row, dict):
+            return None
+        data_type = str(row.get("data_type", "")).strip().lower()
+        if not data_type:
+            return None
+        families.append(data_type)
+    return np.array(families, dtype=object)
 
 
 def _resolve_selected_indices(
@@ -304,6 +327,10 @@ def load_activation_feature_bundle(
     labels = labels_full[selected_indices]
 
     prompt_groups = _extract_prompt_groups(metadata, selected_indices=selected_indices)
+    example_families = _extract_example_families(
+        metadata=metadata,
+        selected_indices=selected_indices,
+    )
 
     features_by_layer: dict[int, np.ndarray] = {}
     for layer_idx, layer_dir in layer_dirs.items():
@@ -322,6 +349,7 @@ def load_activation_feature_bundle(
         root=root_or_leaf.expanduser().resolve(),
         layer_dirs=layer_dirs,
         prompt_groups=prompt_groups,
+        example_families=example_families,
         prompt_subset=prompt_subset,
         example_indices=selected_indices,
         n_total_examples=n_total,
