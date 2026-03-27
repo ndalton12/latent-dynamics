@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+import pandas as pd
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from IPython.display import display
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 
 @dataclass
@@ -16,6 +19,16 @@ class ModelSpec:
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
+    # Small models for dev purposes
+    "gemma3_270m": ModelSpec(
+        path="google/gemma-3-270m-it",
+        dtype="bfloat16",
+    ),
+    "qwen3_0.6b": ModelSpec(
+        path="Qwen/Qwen3-0.6B",
+        dtype="bfloat16",
+    ),
+    # Large models for final eval
     "qwen3_8b": ModelSpec(
         path="Qwen/Qwen3-8B",
         dtype="bfloat16",
@@ -28,10 +41,6 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         path="google/gemma-3-4b-it",
         dtype="bfloat16",
     ),
-    "gemma3_270m": ModelSpec(
-        path="google/gemma-3-270m-it",
-        dtype="bfloat16",
-    ),  # small model for dev purposes
 }
 
 
@@ -51,7 +60,7 @@ def get_torch_dtype(dtype: torch.dtype | str | None) -> torch.dtype | str | None
 def load_model_and_tokenizer(
     model_spec: ModelSpec | str,
     device: str | None = None,
-) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
+) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
     """Load model and tokenizer from a ModelSpec."""
     if isinstance(model_spec, str):
         model_spec = MODEL_REGISTRY[model_spec]
@@ -80,3 +89,49 @@ def load_model_and_tokenizer(
         f"\n  Device:                          {model.device}"
     )
     return model, tokenizer
+
+
+def get_token_groups(tokenizer: PreTrainedTokenizerBase) -> dict[str, list[int]]:
+    tokenizer_id = f"{tokenizer.__class__.__name__}_{len(tokenizer)}"
+    if tokenizer_id == "GemmaTokenizer_262145":
+        return {
+            "common": list(range(494, 255968)),
+            "unused": list(range(6, 105)) + list(range(256001, 262144)),
+            "whitespace": list(range(107, 168)) + list(range(255968, 255999)),
+            "bytes": list(range(238, 494)),
+            "html": list(range(168, 238)),
+            "special": list(range(0, 6)) + [105, 106] + [255999, 256000],
+        }
+    else:
+        raise ValueError(f"Unknown tokenizer {tokenizer_id}. Please define token groups for this tokenizer.")
+
+
+def print_token_groups(tokenizer: PreTrainedTokenizerBase, token_groups: dict[str, list[int]]):
+    for group_name, token_ids in token_groups.items():
+        print(f"Token group: {group_name}")
+        display(
+            pd.DataFrame(
+                {
+                    "token_id": token_ids,
+                    "token": tokenizer.convert_ids_to_tokens(token_ids),
+                }
+            )
+        )
+
+
+def get_token_embeddings(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    token_ids: list[int] | None,
+) -> tuple[list[str], np.array]:
+    if token_ids is None:
+        token_ids = list(range(len(tokenizer)))
+
+    tokens = tokenizer.convert_ids_to_tokens(token_ids)
+    embeddings = model.get_input_embeddings().weight.cpu().float().numpy()[token_ids]
+
+    if model.__class__.__name__.startswith("Gemma3"):
+        # Gemma3 models scale token embeddings by sqrt(hidden_size)
+        # reference: https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/gemma3/modeling_gemma3.py#L102
+        embeddings *= np.sqrt(model.config.hidden_size)
+    return tokens, embeddings
