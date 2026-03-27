@@ -23,6 +23,7 @@ class ModelKey(str, Enum):
     qwen3_8b = "qwen3_8b"
     llama_3_1_8b = "llama_3_1_8b"
     gemma3_4b = "gemma3_4b"
+    gemma3_12b = "gemma3_12b"
 
 
 class DatasetKey(str, Enum):
