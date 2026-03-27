@@ -45,6 +45,10 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "hf_id": "google/gemma-3-270m-it",
         "dtype": "bfloat16",
     },  # small model for dev purposes
+    "gemma3_12b": {
+        "hf_id": "google/gemma-3-12b-it",
+        "dtype": "bfloat16",
+    },
 }
 
 # Default layer indices when not specified (plan: Llama 20, Qwen3 24, Gemma 18).
@@ -52,6 +56,7 @@ DEFAULT_LAYERS: dict[str, int] = {
     "llama_3_1_8b": 20,
     "qwen3_8b": 24,
     "gemma3_4b": 18,
+    "gemma3_12b": 24,
 }
 
 TOY_CONTRASTIVE = [
