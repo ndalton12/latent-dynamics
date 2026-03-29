@@ -13,7 +13,7 @@ from sklearn.decomposition import PCA as _PCA
 from tqdm.auto import tqdm
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod
-from latent_dynamics.dayang.utils import choice, escape_token, get_tooltip_per_layer, get_tooltip_per_token
+from latent_dynamics.dayang.utils import escape_token, get_tooltip_per_layer, get_tooltip_per_token, select
 
 
 class PCA(_PCA):
@@ -471,7 +471,7 @@ def plot_token_embeddings(
     backend: str = "plotly",
 ):
     # Compute PCA on a subset of token embeddings from each group
-    indices = np.concatenate([choice(token_ids, exactly=num_samles_use) for token_ids in token_groups.values()])
+    indices = np.concatenate([select(token_ids, exactly=num_samles_use) for token_ids in token_groups.values()])
     embeddings = model.get_input_embeddings().weight.cpu().float().numpy()
     pca = PCA(n_components=num_components)
     pca.fit(embeddings[indices])
@@ -489,7 +489,7 @@ def plot_token_embeddings(
     pcs = {f"PC{i + 1}": [] for i in range(num_components)}
     for token_group, token_ids in token_groups.items():
         # Project token embeddings
-        token_ids = choice(token_ids, at_most=num_samples_show)
+        token_ids = select(token_ids, at_most=num_samples_show)
         embeddings_proj = pca.transform(embeddings[token_ids])
         # Aggregate data for plotting
         groups.extend([token_group] * len(token_ids))

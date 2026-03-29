@@ -4,9 +4,10 @@ import html as _html
 import textwrap
 
 import numpy as np
+import pandas as pd
 
 
-def choice(
+def select(
     token_ids: list[int] | np.array,
     at_most: int | None = None,
     exactly: int | None = None,
@@ -29,6 +30,20 @@ def choice(
             return rng.choice(token_ids, size=at_most, replace=False)
     else:
         return token_ids
+
+
+def select_from_grid(points: np.ndarray, resolution: int = 100, samples_per_bin: int = 1):
+    x_bins = np.linspace(points[:, 0].min(), points[:, 0].max(), resolution)
+    y_bins = np.linspace(points[:, 1].min(), points[:, 1].max(), resolution)
+
+    x_indices = np.digitize(points[:, 0], x_bins)
+    y_indices = np.digitize(points[:, 1], y_bins)
+
+    df_points = pd.DataFrame({"x": points[:, 0], "y": points[:, 1], "x_bin": x_indices, "y_bin": y_indices})
+    df_points_sampled = df_points.groupby(["x_bin", "y_bin"]).head(samples_per_bin)
+    points_sampled = df_points_sampled[["x", "y"]].values
+
+    return points_sampled
 
 
 def escape_token(token: str, html: bool = False) -> str:

@@ -9,7 +9,7 @@ from traitlets import Bool
 from latent_dynamics.dayang.activations import Activations, PoolMethod, extract_activations
 from latent_dynamics.dayang.data import DATASET_REGISTRY, load_dataset_from_spec
 from latent_dynamics.dayang.model import MODEL_REGISTRY, get_token_embeddings, load_model_and_tokenizer
-from latent_dynamics.dayang.utils import choice
+from latent_dynamics.dayang.utils import select
 
 
 def _str_to_slice(s: str) -> slice | None:
@@ -378,7 +378,7 @@ class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.Descr
             self.out.clear_output(wait=True)
 
             model, tokenizer = load_model_and_tokenizer(self.model_name)
-            token_ids = choice(range(tokenizer.vocab_size), at_most=self.max_tokens)
+            token_ids = select(range(tokenizer.vocab_size), at_most=self.max_tokens)
             token_embeddings = get_token_embeddings(model, tokenizer, token_ids=token_ids)
             self._update_value(token_embeddings)
 
