@@ -375,14 +375,14 @@ def _prepare_dataset(
 
     avg_input_length_chars = np.mean([len(sample["input"]) for sample in dataset])
     avg_input_length_words = np.mean([len(sample["input"].split()) for sample in dataset])
-    samples_safe = dataset.filter(lambda sample: sample["is_safe"]).select(range(5))
-    samples_unsafe = dataset.filter(lambda sample: not sample["is_safe"]).select(range(5))
+    samples_safe = dataset.filter(lambda sample: sample["is_safe"])
+    samples_unsafe = dataset.filter(lambda sample: not sample["is_safe"])
     print(
         f"Prepared dataset:"
         f"\n  Input length (avg):   {avg_input_length_chars:.1f} chars, {avg_input_length_words:.1f} words"
         f"\n  Samples:"
-        f"\n    Safe:\n{'\n'.join(f'      - {sample}' for sample in samples_safe)}"
-        f"\n    Unsafe:\n{'\n'.join(f'      - {sample}' for sample in samples_unsafe)}"
+        f"\n    Safe:\n{'\n'.join(f'      - {sample}' for sample in samples_safe.select(range(min(5, len(samples_safe)))))}"
+        f"\n    Unsafe:\n{'\n'.join(f'      - {sample}' for sample in samples_unsafe.select(range(min(5, len(samples_unsafe)))))}"
     )
 
     return dataset
