@@ -322,16 +322,16 @@ class Activations:
                 for sample_id in sample_ids
             ]
 
-    def select(self, sample_ids: list[str] | None = None, layer_indices: list[int] | None = None) -> "Activations":
+    def select(self, sample_ids: list[str] | None = None, layers: list[int] | None = None) -> "Activations":
         """Return a new Activations object containing only the specified samples and/or layers."""
         samples = self.samples
         activations = self.activations
         topk = self.topk
         if sample_ids is not None:
             samples = samples.loc[sample_ids]
-        if layer_indices is not None:
-            activations = {layer_idx: activations[layer_idx] for layer_idx in activations if layer_idx in layer_indices}
-            topk = {layer_idx: topk[layer_idx] for layer_idx in topk if layer_idx in layer_indices}
+        if layers is not None:
+            activations = {layer_idx: activations[layer_idx] for layer_idx in activations if layer_idx in layers}
+            topk = {layer_idx: topk[layer_idx] for layer_idx in topk if layer_idx in layers}
         return Activations(samples=samples, activations=activations, topk=topk)
 
 

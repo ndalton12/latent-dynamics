@@ -77,18 +77,15 @@ def compute_pca_per_layer(
 
 
 def plot_pca_ratio_per_layer(pcas: list[PCA]):
-    """Compute PCA for each layer and plot explained variance ratio."""
-    explained_ratios = []
-
-    for pca in pcas:
-        explained_ratios.append(pca.explained_variance_ratio_)
+    """Compute PCA for each layer and plot percentage of explained variance."""
+    explained_ratios = [pca.explained_variance_ratio_ for pca in pcas]
 
     plt.figure(figsize=(6, 4))
     plt.stackplot(range(len(pcas)), np.array(explained_ratios).T)
     plt.ylim(0, 1)
-    plt.title("Explained Variance Ratio per PC")
+    plt.title("Percentage of explained variance per PC")
     plt.xlabel("Layer")
-    plt.ylabel("Explained Variance Ratio")
+    plt.ylabel("Percentage of explained variance")
     plt.grid(True, alpha=0.3)
     plt.show()
 
@@ -154,7 +151,7 @@ def plot_pca_per_layer(
                         markersize=6,
                     )
 
-            ax.grid(True, alpha=0.25)
+            ax.grid(True, alpha=0.3)
             ax.set_title(f"Layer {layer_idx}")
             ax.set_xlabel("PC1")
             ax.set_ylabel("PC2")
