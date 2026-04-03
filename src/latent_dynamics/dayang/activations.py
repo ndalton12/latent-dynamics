@@ -116,6 +116,8 @@ class TopK:
                 f"Tokens and probabilities must have the same shape, got {self.tokens.shape} and {self.probs.shape}."
             )
 
+    def __getitem__(self, idx):
+        return TopK(tokens=self.tokens[idx], probs=self.probs[idx])
 
 @dataclass
 class Activations:
