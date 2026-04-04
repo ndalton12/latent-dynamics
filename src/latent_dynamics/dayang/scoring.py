@@ -174,12 +174,8 @@ def plot_score_per_layer(
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
     ncols: int = 5,
-    backend: Literal["plotly"] = "plotly",
 ) -> None:
     """Visualize concept scores per layer."""
-    if backend != "plotly":
-        raise NotImplementedError("Only plotly backend is supported for now.")
-
     num_layers = activations.num_layers
     nrows = math.ceil(num_layers / ncols)
 
