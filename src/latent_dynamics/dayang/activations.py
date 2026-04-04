@@ -123,6 +123,7 @@ class TopK:
     def shape(self):
         return self.tokens.shape
 
+
 @dataclass
 class Activations:
     samples: pd.DataFrame
@@ -210,123 +211,69 @@ class Activations:
             f"\n  Size of topk tokens: {num_bytes / 1024 / 1024:.1f} MB"
         )
 
-    def get_per_layer(
+    def get(
         self,
-        layer_idx: int,
         sample_ids: str | list[str] | None = None,
+        layers: int | list[int] | None = None,
         pool_method: PoolMethod = "all",
         exclude_bos: bool = True,
         exclude_special_tokens: bool | list[str] = True,
-    ) -> Any:
-        """Get activations for the specified layer over the pooled tokens."""
+    ) -> list[dict[str, Any]]:
+        """Get activations for the specified samples and layers over the pooled tokens."""
         if sample_ids is None:
             sample_ids = self.samples.index.tolist()
+        elif isinstance(sample_ids, str):
+            sample_ids = [sample_ids]
 
-        if isinstance(sample_ids, str):
-            sample_id = sample_ids
-            sample = self.samples.loc[sample_id]
-            activations = self.activations[layer_idx][sample_id]  # shape: (num_tokens, hidden_size)
+        if layers is None:
+            layers = self.layers
+        elif isinstance(layers, int):
+            layers = [layers]
+
+        results = []
+        for sample_id in sample_ids:
+            sample = self.samples.loc[sample_id].copy()
             tokens = sample["tokens"]
-            if layer_idx in self.topk:
-                activations, tokens, token_positions, topk_tokens, topk_probs = _pool(
-                    activations,
-                    tokens,
-                    self.topk[layer_idx][sample_id].tokens,
-                    self.topk[layer_idx][sample_id].probs,
-                    pool_method=pool_method,
-                    exclude_bos=exclude_bos,
-                    exclude_special_tokens=exclude_special_tokens,
-                )
-            else:
-                activations, tokens, token_positions = _pool(
-                    activations,
-                    tokens,
-                    pool_method=pool_method,
-                    exclude_bos=exclude_bos,
-                    exclude_special_tokens=exclude_special_tokens,
-                )
-                topk_tokens = np.full(len(tokens), None)
-                topk_probs = np.full(len(tokens), None)
-            topk = TopK(tokens=topk_tokens, probs=topk_probs)
-            sample["tokens_all"] = sample.pop("tokens")  # rename since key used for pooled tokens
-            return {
-                "id": sample_id,
-                **sample.to_dict(),
-                "activations": activations,  # shape: (num_pooled_tokens, hidden_size)
-                "tokens": tokens,  # shape: (num_pooled_tokens,)
-                "token_positions": token_positions,  # shape: (num_pooled_tokens,)
-                "topk": topk,  # shape: (num_pooled_tokens, topk | None)
-            }
-        else:
-            return [
-                self.get_per_layer(
-                    sample_ids=sample_id,
-                    layer_idx=layer_idx,
-                    pool_method=pool_method,
-                    exclude_bos=exclude_bos,
-                    exclude_special_tokens=exclude_special_tokens,
-                )
-                for sample_id in sample_ids
-            ]
 
-    def get_per_token(
-        self,
-        sample_ids: str | list[str] | None = None,
-        pool_method: PoolMethod = "all",
-        exclude_bos: bool = True,
-        exclude_special_tokens: bool | list[str] = True,
-    ) -> Any:
-        """Get activations for the pooled tokens over all layers."""
-        if sample_ids is None:
-            sample_ids = self.samples.index.tolist()
-
-        if isinstance(sample_ids, str):
-            sample_id = sample_ids
-            sample = self.samples.loc[sample_id]
+            # Get activations for specified samples and layers
             activations = np.stack(
-                [self.activations[layer_idx][sample_id] for layer_idx in self.layers],
-                axis=1,
+                [self.activations[layer_idx][sample_id] for layer_idx in layers], axis=1
             )  # shape: (num_tokens, num_layers, hidden_size)
-            tokens = sample["tokens"]
-            topk_tokens = np.empty((len(tokens), self.num_layers), dtype=object)
-            topk_probs = np.empty((len(tokens), self.num_layers), dtype=object)
-            for i, layer_idx in enumerate(self.layers):
+            # Get topk for specified samples and layers
+            topk_tokens = np.empty((len(tokens), len(layers)), dtype=object)
+            topk_probs = np.empty((len(tokens), len(layers)), dtype=object)
+            for i, layer_idx in enumerate(layers):
                 if layer_idx in self.topk:
                     topk_tokens[:, i] = list(self.topk[layer_idx][sample_id].tokens)
                     topk_probs[:, i] = list(self.topk[layer_idx][sample_id].probs)
                 else:
                     topk_tokens[:, i] = None
                     topk_probs[:, i] = None
-            activations, tokens, token_positions, topk_tokens, topk_probs = _pool(
+            topk = TopK(tokens=topk_tokens, probs=topk_probs)
+
+            # Pool over token positions
+            activations, tokens, token_positions, topk = _pool(
                 activations,
                 tokens,
-                topk_tokens,
-                topk_probs,
+                topk,
                 pool_method=pool_method,
                 exclude_bos=exclude_bos,
                 exclude_special_tokens=exclude_special_tokens,
             )
-            topk = TopK(tokens=topk_tokens, probs=topk_probs)
+
             sample["tokens_all"] = sample.pop("tokens")  # rename since key used for pooled tokens
-            return {
-                "id": sample_id,
-                **sample.to_dict(),
-                "activations": activations,  # shape: (num_pooled_tokens, num_layers, hidden_size)
-                "tokens": tokens,  # shape: (num_pooled_tokens,)
-                "token_positions": token_positions,  # shape: (num_pooled_tokens,)
-                "layers": self.layers,  # shape: (num_layers,)
-                "topk": topk,  # shape: (num_pooled_tokens, num_layers, topk | None)
-            }
-        else:
-            return [
-                self.get_per_token(
-                    sample_ids=sample_id,
-                    pool_method=pool_method,
-                    exclude_bos=exclude_bos,
-                    exclude_special_tokens=exclude_special_tokens,
-                )
-                for sample_id in sample_ids
-            ]
+            results.append(
+                {
+                    "id": sample_id,
+                    **sample.to_dict(),
+                    "layers": layers,  # shape: (num_layers,)
+                    "tokens": tokens,  # shape: (num_tokens,)
+                    "token_positions": token_positions,  # shape: (num_tokens,)
+                    "activations": activations,  # shape: (num_tokens, num_layers, hidden_size)
+                    "topk": topk,  # shape: (num_tokens, num_layers, topk | None)
+                }
+            )
+        return results
 
     def select(self, sample_ids: list[str] | None = None, layers: list[int] | None = None) -> "Activations":
         """Return a new Activations object containing only the specified samples and/or layers."""

@@ -64,13 +64,13 @@ def topk_to_text(topk_tokens: list[str], topk_probs: list[float], html: bool = F
     return ", ".join(f"'{escape_token(t, html=html)}' ({p:.2f})" for t, p in zip(topk_tokens, topk_probs))
 
 
-def get_tooltip_per_token(sample: dict, topk: int = 3, html: bool = False) -> list[str]:
-    """Create tooltip texts for each token for a given sample."""
+def get_tooltips_per_layer(sample: dict, layer_idx: int, topk: int = 3, html: bool = False) -> list[str]:
+    """Create tooltip texts across tokens for a given sample and layer index."""
     tokens_all = sample["tokens_all"]
     tokens = sample["tokens"]
     text = []
     for i, (token, token_pos, topk_tokens, topk_probs) in enumerate(
-        zip(sample["tokens"], sample["token_positions"], sample["topk"].tokens, sample["topk"].probs)
+        zip(sample["tokens"], sample["token_positions"], sample["topk"].tokens[:, layer_idx], sample["topk"].probs[:, layer_idx])
     ):
         text.append(
             f"ID: {sample['id']}"
@@ -82,18 +82,18 @@ def get_tooltip_per_token(sample: dict, topk: int = 3, html: bool = False) -> li
     return text
 
 
-def get_tooltip_per_layer(sample: dict, i: int, k: int = 3, html: bool = False) -> list[str]:
-    """Create tooltip texts for each layer for a given sample."""
+def get_tooltips_per_token(sample: dict, token_idx: int, k: int = 3, html: bool = False) -> list[str]:
+    """Create tooltip texts across layers for a given sample and token index."""
     tokens_all = sample["tokens_all"]
     tokens = sample["tokens"]
-    token = sample["tokens"][i]
-    token_pos = sample["token_positions"][i]
+    token = sample["tokens"][token_idx]
+    token_pos = sample["token_positions"][token_idx]
     text = []
-    for layer_idx, topk_tokens, topk_probs in zip(sample["layers"], sample["topk"].tokens[i], sample["topk"].probs[i]):
+    for layer_idx, topk_tokens, topk_probs in zip(sample["layers"], sample["topk"].tokens[token_idx], sample["topk"].probs[token_idx]):
         text.append(
             f"ID: {sample['id']}"
             f"<br>Layer: {layer_idx}/{sample['activations'].shape[1] - 1}"
-            f"<br>Position: {token_pos + 1}/{len(tokens_all)} ({i + 1}/{len(tokens)})"
+            f"<br>Position: {token_pos + 1}/{len(tokens_all)} ({token_idx + 1}/{len(tokens)})"
             f"<br>Token: '{escape_token(token, html=html)}'"
             f"<br>Top-k: {topk_to_text(topk_tokens[:k], topk_probs[:k], html=html) if topk_tokens is not None else 'N/A'}"
             f"<br><extra>{tokens_to_text(tokens_all, highlight=token_pos, html=html)}</extra>"

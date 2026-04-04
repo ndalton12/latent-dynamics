@@ -13,7 +13,7 @@ from sklearn.decomposition import PCA as _PCA
 from tqdm.auto import tqdm
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod
-from latent_dynamics.dayang.utils import escape_token, get_tooltip_per_layer, get_tooltip_per_token, select
+from latent_dynamics.dayang.utils import escape_token, get_tooltips_per_token, get_tooltips_per_layer, select
 
 
 class PCA(_PCA):
@@ -54,18 +54,17 @@ def compute_pca_per_layer(
     num_components: int = 2,
 ) -> list[PCA]:
     """Compute PCA for each layer and plot explained variance ratio."""
+    samples = activations.get(
+        pool_method=pool_method,
+        exclude_bos=exclude_bos,
+        exclude_special_tokens=exclude_special_tokens,
+    )
+
     pcas = []
     explained_ratios = []
-
-    for layer_idx in tqdm(activations.layers, desc="Computing PCA per layer"):
+    for i, layer_idx in enumerate(tqdm(activations.layers, desc="Computing PCA per layer")):
         # Aggregate activations across all samples for the current layer
-        samples = activations.get_per_layer(
-            layer_idx=layer_idx,
-            pool_method=pool_method,
-            exclude_bos=exclude_bos,
-            exclude_special_tokens=exclude_special_tokens,
-        )
-        activations_per_layer = np.concatenate([sample["activations"] for sample in samples], axis=0)
+        activations_per_layer = np.concatenate([sample["activations"][:, i] for sample in samples], axis=0)
 
         # Fit PCA for the current layer
         pca = PCA(n_components=num_components)
@@ -100,9 +99,14 @@ def plot_pca_per_layer(
     ncols: int = 5,
 ) -> None:
     """Visualize PCA projections per layer."""
+    samples = activations.get(
+        pool_method=pool_method,
+        exclude_bos=exclude_bos,
+        exclude_special_tokens=exclude_special_tokens,
+    )
+
     num_layers = activations.num_layers
     nrows = math.ceil(num_layers / ncols)
-
     fig = make_subplots(
         rows=nrows,
         cols=ncols,
@@ -110,7 +114,6 @@ def plot_pca_per_layer(
         horizontal_spacing=0.16 / ncols,
         vertical_spacing=0.24 / nrows,
     )
-
     for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting PCA per layer"), pcas)):
         row = (i // ncols) + 1
         col = (i % ncols) + 1
@@ -134,15 +137,9 @@ def plot_pca_per_layer(
                 col=col,
             )
 
-        samples = activations.get_per_layer(
-            layer_idx=layer_idx,
-            pool_method=pool_method,
-            exclude_bos=exclude_bos,
-            exclude_special_tokens=exclude_special_tokens,
-        )
         for sample in samples:
             # Project pooled activations onto the first 2 PCs
-            activations_proj = pca.transform(sample["activations"])
+            activations_proj = pca.transform(sample["activations"][:, i])
 
             # Plot the activations in the PCA space
             color = "green" if sample["is_safe"] else "red"
@@ -157,7 +154,7 @@ def plot_pca_per_layer(
                     line=dict(color=color, width=1),
                     opacity=alpha,
                     hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
-                    hovertext=get_tooltip_per_token(sample, html=True),
+                    hovertext=get_tooltips_per_layer(sample, i, html=True),
                     showlegend=False,
                 ),
                 row=row,
@@ -200,18 +197,20 @@ def compute_pca_per_token(
     num_components: int = 2,
 ) -> list[PCA]:
     """Compute PCA for each token across all layers and samples."""
-    samples = activations.get_per_token(
+    samples = activations.get(
         pool_method=pool_method,
         exclude_bos=exclude_bos,
         exclude_special_tokens=exclude_special_tokens,
     )
+
     if separate:
         if pool_method == "all" and len(samples) > 1:
             raise ValueError(
                 "Cannot use 'separate=True' with 'pool_method=all' and multiple samples"
                 " since it requires token sequences of the same length."
             )
-        num_tokens = len(samples[0]["tokens"])
+
+        num_tokens = samples[0]["activations"].shape[0]
         pcas = []
         for token_idx in tqdm(range(num_tokens), desc="Computing PCA per token"):
             acts = np.concatenate(
@@ -245,7 +244,7 @@ def plot_pca_per_token(
     showlegend: Literal["auto"] | bool = "auto",
 ):
     pca = pca[0]
-    samples = activations.get_per_token(
+    samples = activations.get(
         pool_method=pool_method,
         exclude_bos=exclude_bos,
         exclude_special_tokens=exclude_special_tokens,
@@ -273,7 +272,8 @@ def plot_pca_per_token(
                 "Cannot use 'separate=True' with 'pool_method=all' and multiple samples"
                 " since it requires token sequences of the same length."
             )
-        num_tokens = len(samples[0]["tokens"])
+
+        num_tokens = samples[0]["activations"].shape[0]
         nrows = math.ceil(num_tokens / ncols)
         subplot_titles = []
         for token_idx in range(num_tokens):
@@ -351,7 +351,7 @@ def plot_pca_per_token(
                     textposition="top center",
                     textfont=dict(size=6),
                     hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
-                    hovertext=get_tooltip_per_layer(sample, token_idx, html=True),
+                    hovertext=get_tooltips_per_token(sample, token_idx, html=True),
                     legendgroup=legend_group,
                     legendgrouptitle_text=legend_group_title,
                     name=trace_name,

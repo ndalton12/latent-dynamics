@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from typing import Literal
 
 import numpy as np
 import plotly.graph_objects as go
@@ -14,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from tqdm.auto import tqdm
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod
-from latent_dynamics.dayang.utils import get_tooltip_per_token
+from latent_dynamics.dayang.utils import get_tooltips_per_layer
 
 
 class Reader(ABC):
@@ -138,21 +137,18 @@ def compute_score_per_layer(
     exclude_special_tokens: bool | list[str] = True,
 ) -> list[Reader]:
     """Train a given reader per layer on activations, differentiating safe vs. unsafe inputs."""
+    samples = activations.get(
+        pool_method=pool_method,
+        exclude_bos=exclude_bos,
+        exclude_special_tokens=exclude_special_tokens,
+    )
+
     readers = []
-
-    for layer_idx in tqdm(activations.layers, desc="Training reader per layer"):
-        # Aggregate activations and labels across all samples for the current layer
-        samples = activations.get_per_layer(
-            layer_idx=layer_idx,
-            pool_method=pool_method,
-            exclude_bos=exclude_bos,
-            exclude_special_tokens=exclude_special_tokens,
-        )
-
+    for i, layer_idx in enumerate(tqdm(activations.layers, desc="Training reader per layer")):
         activations_per_layer = []
         labels_per_layer = []
         for sample in samples:
-            acts = sample["activations"]
+            acts = sample["activations"][:, i]
             activations_per_layer.append(acts)
             labels_per_layer.extend([int(sample["is_safe"])] * len(acts))
 
@@ -176,6 +172,12 @@ def plot_score_per_layer(
     ncols: int = 5,
 ) -> None:
     """Visualize concept scores per layer."""
+    samples = activations.get(
+        pool_method=pool_method,
+        exclude_bos=exclude_bos,
+        exclude_special_tokens=exclude_special_tokens,
+    )
+
     num_layers = activations.num_layers
     nrows = math.ceil(num_layers / ncols)
 
@@ -185,15 +187,9 @@ def plot_score_per_layer(
         row = (i // ncols) + 1
         col = (i % ncols) + 1
 
-        samples = activations.get_per_layer(
-            layer_idx=layer_idx,
-            pool_method=pool_method,
-            exclude_bos=exclude_bos,
-            exclude_special_tokens=exclude_special_tokens,
-        )
         for sample in samples:
             # Predict scores using the reader
-            scores = reader.predict(sample["activations"])
+            scores = reader.predict(sample["activations"][:, i])
 
             # Plot the scores
             color = "green" if sample["is_safe"] else "red"
@@ -208,7 +204,7 @@ def plot_score_per_layer(
                     line=dict(color=color, width=1.0),
                     opacity=alpha,
                     hovertemplate="Token Pos: %{x}<br>Score: %{y:.2f}<br>%{text}",
-                    text=get_tooltip_per_token(sample, html=True),
+                    text=get_tooltips_per_layer(sample, i, html=True),
                     showlegend=False,
                 ),
                 row=row,
