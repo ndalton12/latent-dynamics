@@ -259,18 +259,40 @@ def compute_pca_per_token(
     pool_method: PoolMethod = "all",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
-) -> PCA:
+    separate: bool = False,
+    num_components: int = 2,
+) -> list[PCA]:
     """Compute PCA for each token across all layers and samples."""
     samples = activations.get_per_token(
         pool_method=pool_method,
         exclude_bos=exclude_bos,
         exclude_special_tokens=exclude_special_tokens,
     )
-    acts = np.concatenate([sample["activations"] for sample in samples])
-    acts = acts.reshape(-1, acts.shape[-1])  # (num_tokens * num_layers, hidden_size)
-    pca = PCA(n_components=2)
-    pca.fit(acts)
-    return pca
+    if separate:
+        if pool_method == "all" and len(samples) > 1:
+            raise ValueError(
+                "Cannot use 'separate=True' with 'pool_method=all' and multiple samples"
+                " since it requires token sequences of the same length."
+            )
+        num_tokens = len(samples[0]["tokens"])
+        pcas = []
+        for token_idx in tqdm(range(num_tokens), desc="Computing PCA per token"):
+            acts = np.concatenate(
+                [sample["activations"][token_idx] for sample in samples]
+            )  # (num_samples, num_layers, hidden_size)
+            acts = acts.reshape(-1, acts.shape[-1])  # (num_samples * num_layers, hidden_size)
+            pca = PCA(n_components=num_components)
+            pca.fit(acts)
+            pcas.append(pca)
+        return pcas
+    else:
+        acts = np.concatenate(
+            [sample["activations"] for sample in samples]
+        )  # (num_samples * num_tokens, num_layers, hidden_size)
+        acts = acts.reshape(-1, acts.shape[-1])  # (num_samples * num_tokens * num_layers, hidden_size)
+        pca = PCA(n_components=num_components)
+        pca.fit(acts)
+        return [pca]
 
 
 def plot_pca_per_token(
@@ -286,6 +308,7 @@ def plot_pca_per_token(
     colorby: Literal["auto", "token", "sample", "is_safe"] | None = "auto",
     showlegend: Literal["auto"] | bool = "auto",
 ):
+    pca = pca[0]
     samples = activations.get_per_token(
         pool_method=pool_method,
         exclude_bos=exclude_bos,
@@ -356,9 +379,10 @@ def plot_pca_per_token(
     elif backend == "plotly":
         # Create figure
         if separate:
-            if pool_method == "all":
+            if pool_method == "all" and len(samples) > 1:
                 raise ValueError(
-                    "Cannot use 'separate=True' with 'pool_method=all' since it requires token sequences of the same length."
+                    "Cannot use 'separate=True' with 'pool_method=all' and multiple samples"
+                    " since it requires token sequences of the same length."
                 )
             num_tokens = len(samples[0]["tokens"])
             nrows = math.ceil(num_tokens / ncols)
@@ -414,17 +438,19 @@ def plot_pca_per_token(
             ):
                 # Project activations
                 activations_proj = pca.transform(acts)
-                # Configure legend and grouping
-                legend_group = sample["id"] if len(samples) > 1 else None
+                # Plot activations in PCA space
                 if separate:
+                    text = [str(layer) for layer in activations.layers]
+                    legend_group = sample["id"] if len(samples) > 1 else None
                     legend_group_title = None
                     trace_name = sample["id"] if token_idx == 0 else None
                     show_legend = token_idx == 0
                 else:
+                    text = [f"{token_pos + 1}.{layer}" for layer in activations.layers]
+                    legend_group = sample["id"] if len(samples) > 1 else None
                     legend_group_title = sample["id"] if len(samples) > 1 else None
                     trace_name = f"{token_pos + 1}: {escape_token(token)}"
                     show_legend = True
-                # Plot activations in PCA space
                 fig.add_trace(
                     go.Scatter(
                         x=activations_proj[:, 0],
@@ -432,7 +458,7 @@ def plot_pca_per_token(
                         mode="lines+markers+text",
                         marker=dict(color=color, size=4),
                         line=dict(color=color, width=1),
-                        text=[f"{token_pos + 1}.{layer}" for layer in activations.layers],
+                        text=text,
                         textposition="top center",
                         textfont=dict(size=6),
                         hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
