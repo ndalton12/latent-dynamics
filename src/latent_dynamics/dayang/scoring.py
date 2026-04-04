@@ -7,6 +7,7 @@ from typing import Literal
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -43,11 +44,28 @@ class DifferenceInMeanReader(Reader):
         unsafe_mean = activations[labels == 0].mean(axis=0)
         direction = safe_mean - unsafe_mean
         self.direction = direction / np.linalg.norm(direction)
+        self.bias = (safe_mean + unsafe_mean) / 2
+
+        # Fit a PCA model orthogonal to the direction and bias
+        w = self.direction / (np.linalg.norm(self.direction) or 1)
+        activations_orthogonal = activations - np.outer(activations @ w, w)
+        self.pca = PCA(n_components=2)
+        self.pca.fit(activations_orthogonal)
 
     def predict(self, activations: np.ndarray) -> np.ndarray:
         if self.direction is None:
             raise RuntimeError("Reader must be trained before calling predict.")
-        return activations @ self.direction
+        return (activations - self.bias) @ self.direction
+
+    def transform(self, activations: np.ndarray) -> np.ndarray:
+        """Project activations onto the concept direction and the PCA components."""
+        if self.direction is None:
+            raise RuntimeError("Reader must be trained before calling transform.")
+        w = self.direction / (np.linalg.norm(self.direction) or 1)
+        activations_orthogonal = activations - np.outer(activations @ w, w)
+        pca_components = self.pca.transform(activations_orthogonal)
+        concept_component = (activations - self.bias) @ self.direction
+        return np.concatenate([concept_component[:, None], pca_components], axis=1)
 
 
 class LinearProbe(Reader):
@@ -65,10 +83,42 @@ class LinearProbe(Reader):
         )
 
     def train(self, activations: np.ndarray, labels: np.ndarray) -> None:
+        # Fit the logistic regression model
         self.model.fit(activations, labels)
+        # Reconstruct the unscaled direction and bias from the trained model
+        scaler = self.model.named_steps["scaler"]
+        model = self.model.named_steps["model"]
+        direction = model.coef_[0] / scaler.scale_
+        bias = scaler.mean_ - model.intercept_[0] * direction / (np.dot(direction, direction) or 1)
+        self.direction = direction
+        self.bias = bias
+
+        # Fit a PCA model orthogonal to the direction and bias
+        w = self.direction / (np.linalg.norm(self.direction) or 1)
+        activations_orthogonal = activations - np.outer(activations @ w, w)
+        self.pca = PCA(n_components=2)
+        self.pca.fit(activations_orthogonal)
 
     def predict(self, activations: np.ndarray) -> np.ndarray:
-        return self.model.decision_function(activations).astype(np.float32)
+        if self.direction is None:
+            raise RuntimeError("Reader must be trained before calling predict.")
+        foo1 = self.model.decision_function(activations)
+        foo2 = (activations - self.bias) @ self.direction
+        if not np.isclose(foo2, foo1, atol=1e-4).all():
+            print(
+                f"Max absolute difference between decision function and direct dot product: {np.max(np.abs(foo1 - foo2)):.6f}"
+            )
+        return foo2
+
+    def transform(self, activations: np.ndarray) -> np.ndarray:
+        """Project activations onto the concept direction and the PCA components."""
+        if self.direction is None:
+            raise RuntimeError("Reader must be trained before calling transform.")
+        w = self.direction / (np.linalg.norm(self.direction) or 1)
+        activations_orthogonal = activations - np.outer(activations @ w, w)
+        pca_components = self.pca.transform(activations_orthogonal)
+        concept_component = (activations - self.bias) @ self.direction
+        return np.concatenate([concept_component[:, None], pca_components], axis=1)
 
 
 def get_reader(method: str, **kwargs) -> Reader:
