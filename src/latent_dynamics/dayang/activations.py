@@ -46,7 +46,7 @@ def _pool(
     activations = np.asarray(activations)
     tokens = np.asarray(tokens)
     token_positions = np.arange(len(tokens))
-    arrays = [np.asarray(array) for array in arrays]
+    arrays = [np.asarray(array) if isinstance(array, (list | tuple)) else array for array in arrays]
 
     # Exclude BOS and/or special tokens
     if exclude_bos:
@@ -102,14 +102,14 @@ def _topk(logits: torch.Tensor, tokenizer: PreTrainedTokenizerBase, k: int = 10)
     return TopK(tokens=topk_tokens, probs=topk_probs)
 
 
-@dataclass
+@dataclass(frozen=True)
 class TopK:
     tokens: np.ndarray  # shape: (num_tokens, topk)
     probs: np.ndarray  # shape: (num_tokens, topk)
 
     def __post_init__(self):
-        self.tokens = np.asarray(self.tokens)
-        self.probs = np.asarray(self.probs)
+        object.__setattr__(self, "tokens", np.asarray(self.tokens))
+        object.__setattr__(self, "probs", np.asarray(self.probs))
 
         if self.tokens.shape != self.probs.shape:
             raise ValueError(
@@ -118,6 +118,10 @@ class TopK:
 
     def __getitem__(self, idx):
         return TopK(tokens=self.tokens[idx], probs=self.probs[idx])
+
+    @property
+    def shape(self):
+        return self.tokens.shape
 
 @dataclass
 class Activations:
