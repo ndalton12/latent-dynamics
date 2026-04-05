@@ -53,7 +53,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         )
         self.w_custom_response = widgets.Text(value="", description="Custom")
         self.w_apply_chat_template = widgets.Checkbox(value=apply_chat_template, description="Apply chat template")
-        self.btn_extract_activations = widgets.Button(description="Extract Activations", button_style="primary")
+        self.btn_extract_activations = widgets.Button(description="Extract activations", button_style="primary")
         col_extract_activations = widgets.VBox(
             [
                 self.w_model,
@@ -75,8 +75,8 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         col_extract_topk = widgets.VBox([self.w_topk_model, self.w_topk_layer, self.w_topk_k, self.btn_extract_topk])
 
         self.w_path = widgets.Combobox(options=get_activation_folders(self.search_path), description="Path")
-        self.btn_load = widgets.Button(description="Load Activations", button_style="primary")
-        self.btn_save = widgets.Button(description="Save Activations", button_style="success", disabled=True)
+        self.btn_load = widgets.Button(description="Load activations", button_style="primary")
+        self.btn_save = widgets.Button(description="Save activations", button_style="success", disabled=True)
         col_load = widgets.VBox(
             [
                 self.w_path,
@@ -273,21 +273,14 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
                 self.w_exclude_special_tokens,
             ]
         )
+        self._links = []
 
         # Register handlers
         self.w_pool_method.observe(self._update_pool_method, names="value")
         self._update_pool_method()
 
         self.w_exclude_special_tokens.observe(self._update_value, names="value")
-        for w in [
-            self.w_safe,
-            self.w_unsafe,
-            self.w_pool_method,
-            self.w_pool_indices,
-            self.w_pool_slice,
-            self.w_exclude_bos,
-            self.w_exclude_special_tokens,
-        ]:
+        for w in self.children:
             w.observe(self._update_value, names="value")
 
     def _update_value(self, *args):
@@ -302,6 +295,22 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
             self.w_pool_indices.layout.display = None  # show the widget
         else:
             self.w_pool_indices.layout.display = "none"  # hide the widget
+
+    def link(self, other: "ActivationsSelectorWidget"):
+        for w1, w2 in zip(self.children, other.children):
+            if isinstance(w1, (widgets.SelectMultiple | widgets.Dropdown)):
+                key = "index"
+            else:
+                key = "value"
+            link = widgets.jslink((w1, key), (w2, key))
+            w1.disabled = True
+            self._links.append((w1, link))
+
+    def unlink(self):
+        for w, link in self._links:
+            link.unlink()
+            w.disabled = False
+        self._links.clear()
 
     def set_activations(self, activations: Activations):
         samples_safe = activations.samples[activations.samples["is_safe"]].index.tolist()
