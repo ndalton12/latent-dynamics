@@ -2,9 +2,50 @@ from __future__ import annotations
 
 import html as _html
 import textwrap
+from collections import OrderedDict
+from typing import Callable
 
 import numpy as np
 import pandas as pd
+
+
+def to_hashable(obj, encoders: dict[type, Callable] | None = None):
+    """Recursively converts mutable objects into hashable ones."""
+    if encoders is not None and type(obj) in encoders:
+        obj = encoders[type(obj)](obj)
+        return to_hashable(obj, encoders=encoders)
+    elif isinstance(obj, (list, tuple)):
+        return tuple(to_hashable(e, encoders=encoders) for e in obj)
+    elif isinstance(obj, dict):
+        return frozenset((k, to_hashable(v, encoders=encoders)) for k, v in obj.items())
+    elif isinstance(obj, set):
+        return frozenset(to_hashable(e, encoders=encoders) for e in obj)
+    return obj
+
+
+class Cache:
+    def __init__(self, maxsize: int | None = None, encoders: dict[type, Callable] | None = None):
+        self.maxsize = maxsize
+        self.encoders = encoders
+        self._cache = OrderedDict()
+
+    def __call__(self, func, *args, **kwargs):
+        key = (func, to_hashable(args, encoders=self.encoders), to_hashable(kwargs, encoders=self.encoders))
+        if key in self._cache:
+            # Return from cache
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        else:
+            # Evaluate function and store in cache
+            result = func(*args, **kwargs)
+            self._cache[key] = result
+            # Remove least recently used item
+            if self.maxsize is not None and len(self._cache) > self.maxsize:
+                self._cache.popitem(last=False)
+            return result
+
+    def clear(self):
+        self._cache.clear()
 
 
 def select(
