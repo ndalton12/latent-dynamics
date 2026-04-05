@@ -9,8 +9,8 @@ import pandas as pd
 
 def select(
     array: list[int] | np.array,
-    at_most: int | None = None,
-    exactly: int | None = None,
+    at_most: int | float | None = None,
+    exactly: int | float | None = None,
     seed: int = 42,
 ) -> np.array:
     if at_most is not None and exactly is not None:
@@ -19,11 +19,17 @@ def select(
     array = np.asarray(array)
     rng = np.random.default_rng(seed)
     if exactly is not None:
+        if isinstance(exactly, float):
+            exactly = int(len(array) * exactly)
+
         if len(array) <= exactly:
             return np.concatenate([array, rng.choice(array, size=exactly - len(array), replace=True)])
         else:
             return rng.choice(array, size=exactly, replace=False)
     elif at_most is not None:
+        if isinstance(at_most, float):
+            at_most = int(len(array) * at_most)
+
         if len(array) <= at_most:
             return array
         else:
@@ -32,7 +38,10 @@ def select(
         return array
 
 
-def select_from_grid(points: np.ndarray, resolution: int = 100, samples_per_bin: int = 1):
+def select_from_grid(points: np.ndarray, resolution: int | None = 100, samples_per_bin: int = 1):
+    if resolution is None:
+        return points
+
     x_bins = np.linspace(points[:, 0].min(), points[:, 0].max(), resolution)
     y_bins = np.linspace(points[:, 1].min(), points[:, 1].max(), resolution)
 
