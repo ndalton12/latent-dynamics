@@ -8,7 +8,7 @@ import pandas as pd
 
 
 def select(
-    token_ids: list[int] | np.array,
+    array: list[int] | np.array,
     at_most: int | None = None,
     exactly: int | None = None,
     seed: int = 42,
@@ -16,20 +16,20 @@ def select(
     if at_most is not None and exactly is not None:
         raise ValueError("Cannot specify both 'at_most' and 'exactly'.")
 
-    token_ids = np.asarray(token_ids)
+    array = np.asarray(array)
     rng = np.random.default_rng(seed)
     if exactly is not None:
-        if len(token_ids) <= exactly:
-            return np.concatenate([token_ids, rng.choice(token_ids, size=exactly - len(token_ids), replace=True)])
+        if len(array) <= exactly:
+            return np.concatenate([array, rng.choice(array, size=exactly - len(array), replace=True)])
         else:
-            return rng.choice(token_ids, size=exactly, replace=False)
+            return rng.choice(array, size=exactly, replace=False)
     elif at_most is not None:
-        if len(token_ids) <= at_most:
-            return token_ids
+        if len(array) <= at_most:
+            return array
         else:
-            return rng.choice(token_ids, size=at_most, replace=False)
+            return rng.choice(array, size=at_most, replace=False)
     else:
-        return token_ids
+        return array
 
 
 def select_from_grid(points: np.ndarray, resolution: int = 100, samples_per_bin: int = 1):
@@ -69,12 +69,17 @@ def get_tooltips_per_layer(sample: dict, layer_idx: int, topk: int = 3, html: bo
     tokens_all = sample["tokens_all"]
     tokens = sample["tokens"]
     text = []
-    for i, (token, token_pos, topk_tokens, topk_probs) in enumerate(
-        zip(sample["tokens"], sample["token_positions"], sample["topk"].tokens[:, layer_idx], sample["topk"].probs[:, layer_idx])
+    for token_idx, (token, token_pos, topk_tokens, topk_probs) in enumerate(
+        zip(
+            sample["tokens"],
+            sample["token_positions"],
+            sample["topk"].tokens[:, layer_idx],
+            sample["topk"].probs[:, layer_idx],
+        )
     ):
         text.append(
             f"ID: {sample['id']}"
-            f"<br>Position: {token_pos + 1}/{len(tokens_all)} ({i + 1}/{len(tokens)})"
+            f"<br>Position: {token_pos + 1}/{len(tokens_all)} ({token_idx + 1}/{len(tokens)})"
             f"<br>Token: '{escape_token(token, html=html)}'"
             f"<br>Top-k: {topk_to_text(topk_tokens[:topk], topk_probs[:topk], html=html) if topk_tokens is not None else 'N/A'}"
             f"<br><extra>{tokens_to_text(tokens_all, highlight=token_pos, html=html)}</extra>"
@@ -89,7 +94,9 @@ def get_tooltips_per_token(sample: dict, token_idx: int, k: int = 3, html: bool 
     token = sample["tokens"][token_idx]
     token_pos = sample["token_positions"][token_idx]
     text = []
-    for layer_idx, topk_tokens, topk_probs in zip(sample["layers"], sample["topk"].tokens[token_idx], sample["topk"].probs[token_idx]):
+    for layer_idx, topk_tokens, topk_probs in zip(
+        sample["layers"], sample["topk"].tokens[token_idx], sample["topk"].probs[token_idx]
+    ):
         text.append(
             f"ID: {sample['id']}"
             f"<br>Layer: {layer_idx}/{sample['activations'].shape[1] - 1}"

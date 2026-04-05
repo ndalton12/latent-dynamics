@@ -204,8 +204,8 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
             # Extract topk tokens
             model, tokenizer = load_model_and_tokenizer(self.w_topk_model.value)
-            for layer_idx in self.w_topk_layer.value:
-                self.activations.extract_topk(model, tokenizer, layer_idx=layer_idx, k=self.w_topk_k.value)
+            for layer in self.w_topk_layer.value:
+                self.activations.extract_topk(model, tokenizer, layer=layer, k=self.w_topk_k.value)
 
     @property
     def model_name(self) -> str:
@@ -306,8 +306,12 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
     def set_activations(self, activations: Activations):
         samples_safe = activations.samples[activations.samples["is_safe"]].index.tolist()
         samples_unsafe = activations.samples[~activations.samples["is_safe"]].index.tolist()
-        self.w_safe.options = [(f"{i + 1}: {sample_idx}", sample_idx) for i, sample_idx in enumerate(samples_safe)]
-        self.w_unsafe.options = [(f"{i + 1}: {sample_idx}", sample_idx) for i, sample_idx in enumerate(samples_unsafe)]
+        self.w_safe.options = [
+            (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(samples_safe)
+        ]
+        self.w_unsafe.options = [
+            (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(samples_unsafe)
+        ]
         self.w_safe.value = ()
         self.w_unsafe.value = ()
 
@@ -335,7 +339,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
 
 class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
-    tokens_embeddings: tuple[list[str], np.array] | None = None
+    token_embeddings: tuple[list[str], np.array] | None = None
 
     def __init__(self, out: widgets.Output | None = None, **kwargs):
         models = list(MODEL_REGISTRY.keys())
@@ -362,7 +366,7 @@ class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.Descr
         self.btn_clear.on_click(self._do_clear)
 
     def _update_value(self, token_embeddings: tuple[list[str], np.array] | None):
-        self.tokens_embeddings = token_embeddings
+        self.token_embeddings = token_embeddings
         self.value = not self.value
 
     @contextlib.contextmanager

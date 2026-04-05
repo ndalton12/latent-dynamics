@@ -156,8 +156,8 @@ class Activations:
         # Save samples
         self.samples.to_json(path / "samples.json", orient="index", indent=2)
         # Save activations
-        for layer_idx, acts_per_layer in tqdm(self.activations.items(), desc="Saving activations"):
-            np.savez_compressed(path / f"layer_{layer_idx}.npz", **acts_per_layer)
+        for layer, acts_per_layer in tqdm(self.activations.items(), desc="Saving activations"):
+            np.savez_compressed(path / f"layer_{layer}.npz", **acts_per_layer)
         # Save topk
         pd.DataFrame(self.topk).to_json(path / "topk.json", indent=2)
 
@@ -170,8 +170,8 @@ class Activations:
         # Load activations
         activations = {}
         for file in path.glob("layer_*.npz"):
-            layer_idx = int(file.stem.split("_")[1])
-            activations[layer_idx] = np.load(file)
+            layer = int(file.stem.split("_")[1])
+            activations[layer] = np.load(file)
         # Load topk
         topk = pd.read_json(path / "topk.json", orient="columns")
         topk = topk.map(lambda x: TopK(**x))
@@ -182,31 +182,31 @@ class Activations:
         self,
         model: AutoModelForCausalLM,
         tokenizer: PreTrainedTokenizerBase,
-        layer_idx: int | None = None,
+        layer: int | None = None,
         k: int = 10,
     ):
-        if layer_idx is None:
-            layer_idx = self.num_layers - 1
-        if layer_idx not in self.activations:
-            raise ValueError(f"Layer {layer_idx} not found in activations")
+        if layer is None:
+            layer = self.num_layers - 1
+        if layer not in self.activations:
+            raise ValueError(f"Layer {layer} not found in activations")
         if model.lm_head is None:
             raise ValueError("Model does not have an lm_head to compute logits")
 
-        self.topk[layer_idx] = {}
+        self.topk[layer] = {}
         for sample_id in tqdm(self.samples.index, desc=f"Extracting top-{k} tokens"):
             # Compute logits from the activations of the specified layer
-            acts_per_sample = self.activations[layer_idx][sample_id]
+            acts_per_sample = self.activations[layer][sample_id]
             acts_per_sample = torch.tensor(acts_per_sample, dtype=model.dtype).to(model.device)
             logits_per_sample = model.lm_head(acts_per_sample)
             # Compute top-k next tokens and their probabilities
-            self.topk[layer_idx][sample_id] = _topk(logits_per_sample, tokenizer, k=k)
+            self.topk[layer][sample_id] = _topk(logits_per_sample, tokenizer, k=k)
 
-        num_tokens = sum(len(topk_per_sample.tokens) for topk_per_sample in self.topk[layer_idx].values())
+        num_tokens = sum(len(topk_per_sample.tokens) for topk_per_sample in self.topk[layer].values())
         num_bytes = sum(
-            next_tokens.tokens.nbytes + next_tokens.probs.nbytes for next_tokens in self.topk[layer_idx].values()
+            next_tokens.tokens.nbytes + next_tokens.probs.nbytes for next_tokens in self.topk[layer].values()
         )
         print(
-            f"Extracted top-{k} next tokens for layer {layer_idx}"
+            f"Extracted top-{k} next tokens for layer {layer}"
             f"\n  Number of tokens:    {num_tokens}"
             f"\n  Size of topk tokens: {num_bytes / 1024 / 1024:.1f} MB"
         )
@@ -237,18 +237,18 @@ class Activations:
 
             # Get activations for specified samples and layers
             activations = np.stack(
-                [self.activations[layer_idx][sample_id] for layer_idx in layers], axis=1
+                [self.activations[layer][sample_id] for layer in layers], axis=1
             )  # shape: (num_tokens, num_layers, hidden_size)
             # Get topk for specified samples and layers
             topk_tokens = np.empty((len(tokens), len(layers)), dtype=object)
             topk_probs = np.empty((len(tokens), len(layers)), dtype=object)
-            for i, layer_idx in enumerate(layers):
-                if layer_idx in self.topk:
-                    topk_tokens[:, i] = list(self.topk[layer_idx][sample_id].tokens)
-                    topk_probs[:, i] = list(self.topk[layer_idx][sample_id].probs)
+            for layer_idx, layer in enumerate(layers):
+                if layer in self.topk:
+                    topk_tokens[:, layer_idx] = list(self.topk[layer][sample_id].tokens)
+                    topk_probs[:, layer_idx] = list(self.topk[layer][sample_id].probs)
                 else:
-                    topk_tokens[:, i] = None
-                    topk_probs[:, i] = None
+                    topk_tokens[:, layer_idx] = None
+                    topk_probs[:, layer_idx] = None
             topk = TopK(tokens=topk_tokens, probs=topk_probs)
 
             # Pool over token positions
@@ -283,8 +283,8 @@ class Activations:
         if sample_ids is not None:
             samples = samples.loc[sample_ids]
         if layers is not None:
-            activations = {layer_idx: activations[layer_idx] for layer_idx in activations if layer_idx in layers}
-            topk = {layer_idx: topk[layer_idx] for layer_idx in topk if layer_idx in layers}
+            activations = {layer: activations[layer] for layer in activations if layer in layers}
+            topk = {layer: topk[layer] for layer in topk if layer in layers}
         return Activations(samples=samples, activations=activations, topk=topk)
 
 
@@ -377,14 +377,14 @@ def _create_dataloader(
 
 
 @contextlib.contextmanager
-def _capture_pre_norm(model):
-    """Context manager to capture last hidden state before layer norm in the model's forward pass."""
-    last_hidden_state_pre_norm = None
+def _capture_hidden_state_before_norm(model):
+    """Context manager to capture last hidden state before norm in the model's forward pass."""
+    last_hidden_state_before_norm = None
 
     # Attach hook to capture the last hidden state before the final norm layer
     def hook_fn(module, input):
-        nonlocal last_hidden_state_pre_norm
-        last_hidden_state_pre_norm = input[0]
+        nonlocal last_hidden_state_before_norm
+        last_hidden_state_before_norm = input[0]
 
     base_model = getattr(model, model.base_model_prefix, model)
     handle = base_model.norm.register_forward_pre_hook(hook_fn)
@@ -397,14 +397,14 @@ def _capture_pre_norm(model):
         outputs = original_forward(*args, **kwargs)
         if hasattr(outputs, "hidden_states") and outputs.hidden_states is not None:
             outputs.hidden_states = (
-                outputs.hidden_states[:-1] + (last_hidden_state_pre_norm,) + outputs.hidden_states[-1:]
+                outputs.hidden_states[:-1] + (last_hidden_state_before_norm,) + outputs.hidden_states[-1:]
             )
         return outputs
 
     model.forward = wrapped_forward.__get__(model, type(model))
 
     try:
-        yield last_hidden_state_pre_norm
+        yield last_hidden_state_before_norm
     finally:
         # Restore the original forward method and remove the hook
         model.forward = original_forward
@@ -424,7 +424,7 @@ def extract_activations(
     """Extract activations from the model for the given dataset."""
     if layers is None:
         layers = list(range(model.config.num_hidden_layers + 2))
-    last_layer_idx = model.config.num_hidden_layers + 1  # index of the last layer (after the final norm)
+    last_layer = model.config.num_hidden_layers + 1  # index of the last layer (after the final norm)
 
     # Prepare dataset
     dataset = _prepare_dataset(
@@ -445,13 +445,13 @@ def extract_activations(
     # Extract activations
     samples = []
     activations = {layer_idx: {} for layer_idx in layers}
-    topk = {last_layer_idx: {}}
+    topk = {last_layer: {}}
     for batch in tqdm(dataloader, desc="Extracting activations"):
         input_ids = batch["input_ids"].to(model.device)
         attention_mask = batch["attention_mask"].to(model.device)
 
         # Forward pass
-        with _capture_pre_norm(model):
+        with _capture_hidden_state_before_norm(model):
             outputs = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -475,11 +475,11 @@ def extract_activations(
                 }
             )
             # Store activations
-            for layer_idx in layers:
-                acts_per_sample = outputs.hidden_states[layer_idx][i, mask]  # shape: (num_valid_tokens, hidden_size)
-                activations[layer_idx][sample_id] = acts_per_sample.cpu().float().numpy()
+            for layer in layers:
+                acts_per_sample = outputs.hidden_states[layer][i, mask]  # shape: (num_valid_tokens, hidden_size)
+                activations[layer][sample_id] = acts_per_sample.cpu().float().numpy()
             # Store top-k next tokens and their probabilities for the last layer
-            topk[last_layer_idx][sample_id] = _topk(outputs.logits[i, mask], tokenizer, k=k)
+            topk[last_layer][sample_id] = _topk(outputs.logits[i, mask], tokenizer, k=k)
 
     num_samples = len(samples)
     num_tokens = sum(len(sample["tokens"]) for sample in samples)
@@ -489,7 +489,7 @@ def extract_activations(
         acts_per_layer.nbytes for acts_per_layer in activations.values() for acts_per_layer in acts_per_layer.values()
     )
     num_bytes_topk = sum(
-        next_tokens.tokens.nbytes + next_tokens.probs.nbytes for next_tokens in topk[last_layer_idx].values()
+        next_tokens.tokens.nbytes + next_tokens.probs.nbytes for next_tokens in topk[last_layer].values()
     )
     print(
         f"Extracted activations for {num_samples} samples"
@@ -497,7 +497,7 @@ def extract_activations(
         f"\n  Number of layers:     {num_layers - 2} + 2"
         f"\n  Shape of activations: {hidden_size}"
         f"\n  Size of activations:  {num_bytes_acts / 1024 / 1024:.1f} MB"
-        f"\nExtracted top-{k} next tokens for layer {last_layer_idx}"
+        f"\nExtracted top-{k} next tokens for layer {last_layer}"
         f"\n  Number of tokens:    {num_tokens}"
         f"\n  Size of topk tokens: {num_bytes_topk / 1024 / 1024:.1f} MB"
     )

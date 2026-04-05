@@ -144,11 +144,11 @@ def compute_score_per_layer(
     )
 
     readers = []
-    for i, layer_idx in enumerate(tqdm(activations.layers, desc="Training reader per layer")):
+    for layer_idx, layer in enumerate(tqdm(activations.layers, desc="Training reader per layer")):
         activations_per_layer = []
         labels_per_layer = []
         for sample in samples:
-            acts = sample["activations"][:, i]
+            acts = sample["activations"][:, layer_idx]
             activations_per_layer.append(acts)
             labels_per_layer.extend([int(sample["is_safe"])] * len(acts))
 
@@ -183,13 +183,15 @@ def plot_score_per_layer(
 
     fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=[f"Layer {layer}" for layer in activations.layers])
 
-    for i, (layer_idx, reader) in enumerate(zip(tqdm(activations.layers, desc="Plotting scores per layer"), readers)):
-        row = (i // ncols) + 1
-        col = (i % ncols) + 1
+    for layer_idx, (layer, reader) in enumerate(
+        zip(tqdm(activations.layers, desc="Plotting scores per layer"), readers)
+    ):
+        row = (layer_idx // ncols) + 1
+        col = (layer_idx % ncols) + 1
 
         for sample in samples:
             # Predict scores using the reader
-            scores = reader.predict(sample["activations"][:, i])
+            scores = reader.predict(sample["activations"][:, layer_idx])
 
             # Plot the scores
             color = "green" if sample["is_safe"] else "red"
@@ -204,7 +206,7 @@ def plot_score_per_layer(
                     line=dict(color=color, width=1.0),
                     opacity=alpha,
                     hovertemplate="Token Pos: %{x}<br>Score: %{y:.2f}<br>%{text}",
-                    text=get_tooltips_per_layer(sample, i, html=True),
+                    text=get_tooltips_per_layer(sample, layer_idx, html=True),
                     showlegend=False,
                 ),
                 row=row,

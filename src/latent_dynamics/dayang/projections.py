@@ -62,9 +62,9 @@ def compute_pca_per_layer(
 
     pcas = []
     explained_ratios = []
-    for i, layer_idx in enumerate(tqdm(activations.layers, desc="Computing PCA per layer")):
+    for layer_idx, layer in enumerate(tqdm(activations.layers, desc="Computing PCA per layer")):
         # Aggregate activations across all samples for the current layer
-        activations_per_layer = np.concatenate([sample["activations"][:, i] for sample in samples], axis=0)
+        activations_per_layer = np.concatenate([sample["activations"][:, layer_idx] for sample in samples], axis=0)
 
         # Fit PCA for the current layer
         pca = PCA(n_components=num_components)
@@ -95,7 +95,7 @@ def plot_pca_per_layer(
     pool_method: PoolMethod = "last",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
-    tokens_embeddings: tuple[list[str], np.array] | None = None,
+    token_embeddings: tuple[list[str], np.array] | None = None,
     ncols: int = 5,
 ) -> None:
     """Visualize PCA projections per layer."""
@@ -114,13 +114,13 @@ def plot_pca_per_layer(
         horizontal_spacing=0.16 / ncols,
         vertical_spacing=0.24 / nrows,
     )
-    for i, (layer_idx, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting PCA per layer"), pcas)):
-        row = (i // ncols) + 1
-        col = (i % ncols) + 1
+    for layer_idx, (layer, pca) in enumerate(zip(tqdm(activations.layers, desc="Plotting PCA per layer"), pcas)):
+        row = (layer_idx // ncols) + 1
+        col = (layer_idx % ncols) + 1
 
-        if tokens_embeddings is not None and layer_idx in [0, max(activations.layers)]:
+        if token_embeddings is not None and layer in [0, max(activations.layers)]:
             # Project token embeddings
-            tokens, embeddings = tokens_embeddings
+            tokens, embeddings = token_embeddings
             embeddings_proj = pca.transform(embeddings)
             # Plot token embeddings
             fig.add_trace(
@@ -139,7 +139,7 @@ def plot_pca_per_layer(
 
         for sample in samples:
             # Project pooled activations onto the first 2 PCs
-            activations_proj = pca.transform(sample["activations"][:, i])
+            activations_proj = pca.transform(sample["activations"][:, layer_idx])
 
             # Plot the activations in the PCA space
             color = "green" if sample["is_safe"] else "red"
@@ -154,7 +154,7 @@ def plot_pca_per_layer(
                     line=dict(color=color, width=1),
                     opacity=alpha,
                     hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
-                    hovertext=get_tooltips_per_layer(sample, i, html=True),
+                    hovertext=get_tooltips_per_layer(sample, layer_idx, html=True),
                     showlegend=False,
                 ),
                 row=row,
@@ -237,7 +237,7 @@ def plot_pca_per_token(
     pool_method: PoolMethod = "all",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
-    tokens_embeddings: tuple[list[str], np.array] | None = None,
+    token_embeddings: tuple[list[str], np.array] | None = None,
     ncols: int = 3,
     separate: bool = False,
     colorby: Literal["auto", "token", "sample", "is_safe"] | None = "auto",
@@ -261,8 +261,8 @@ def plot_pca_per_token(
         showlegend = len(samples) <= 5
 
     # Project token embeddings
-    if tokens_embeddings is not None:
-        tokens, embeddings = tokens_embeddings
+    if token_embeddings is not None:
+        tokens, embeddings = token_embeddings
         embeddings_proj = pca.transform(embeddings)
 
     # Create figure
@@ -295,7 +295,7 @@ def plot_pca_per_token(
     else:
         fig = go.Figure()
     # Plot token embeddings
-    if tokens_embeddings is not None:
+    if token_embeddings is not None:
         fig.add_trace(
             go.Scatter(
                 x=embeddings_proj[:, 0],
