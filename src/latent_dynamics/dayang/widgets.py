@@ -250,8 +250,9 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         exclude_special_tokens = kwargs.get("exclude_special_tokens", True)
 
         # Create widgets
-        self.w_safe = widgets.SelectMultiple(description="Safe samples")
-        self.w_unsafe = widgets.SelectMultiple(description="Unsafe samples")
+        self.w_samples_safe = widgets.SelectMultiple(description="Safe samples")
+        self.w_samples_unsafe = widgets.SelectMultiple(description="Unsafe samples")
+        self.w_layers = widgets.SelectMultiple(description="Layers")
         self.w_pool_method = widgets.Dropdown(
             options=["all", "indices", "slice", "first", "mid", "last", "mean"], value=pool_method, description="Tokens"
         )
@@ -264,8 +265,9 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
 
         super().__init__(
             children=[
-                self.w_safe,
-                self.w_unsafe,
+                self.w_samples_safe,
+                self.w_samples_unsafe,
+                self.w_layers,
                 self.w_pool_method,
                 self.w_pool_indices,
                 self.w_pool_slice,
@@ -313,20 +315,26 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         self._links.clear()
 
     def set_activations(self, activations: Activations):
-        samples_safe = activations.samples[activations.samples["is_safe"]].index.tolist()
-        samples_unsafe = activations.samples[~activations.samples["is_safe"]].index.tolist()
-        self.w_safe.options = [
-            (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(samples_safe)
+        sample_ids_safe = activations.samples_safe.index
+        sample_ids_unsafe = activations.samples_unsafe.index
+        self.w_samples_safe.options = [
+            (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(sample_ids_safe)
         ]
-        self.w_unsafe.options = [
-            (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(samples_unsafe)
+        self.w_samples_unsafe.options = [
+            (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(sample_ids_unsafe)
         ]
-        self.w_safe.value = ()
-        self.w_unsafe.value = ()
+        self.w_samples_safe.value = ()
+        self.w_samples_unsafe.value = ()
+        self.w_layers.options = activations.layers
+        self.w_layers.value = ()
 
     @property
     def samples(self) -> list[str]:
-        return list(self.w_safe.value) + list(self.w_unsafe.value)
+        return list(self.w_samples_safe.value) + list(self.w_samples_unsafe.value)
+
+    @property
+    def layers(self) -> list[int]:
+        return list(self.w_layers.value)
 
     @property
     def pool_method(self) -> PoolMethod:
