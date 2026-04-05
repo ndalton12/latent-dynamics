@@ -91,12 +91,10 @@ def compute_pca_per_layer(
 def plot_pca_explained_variance(pcas: dict[int, PCA]):
     """Plot percentage of explained variance."""
     if isinstance(pcas, defaultdict):
-        positions = ["default"]
-        explained_variance = [pcas[0].explained_variance_ratio_]
+        positions = ["all"]
     else:
         positions = list(pcas.keys())
-        explained_variance = [pcas[i].explained_variance_ratio_ for i in positions]
-    explained_variance = np.stack(explained_variance, axis=1)
+    explained_variance = np.stack([pcas[i].explained_variance_ratio_ for i in positions], axis=1)
     labels = [f"PC{i + 1}" for i in range(len(explained_variance))]
 
     plt.figure(figsize=(6, 4))
