@@ -59,6 +59,7 @@ def compute_pca_per_layer(
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
     num_components: int = 2,
+    separate: bool = False,
 ) -> dict[int, PCA]:
     """Compute PCA for each layer."""
     samples = activations.get(
@@ -67,17 +68,24 @@ def compute_pca_per_layer(
         exclude_special_tokens=exclude_special_tokens,
     )
 
-    pcas = {}
-    for layer_idx, layer in enumerate(tqdm(activations.layers, desc="Computing PCA per layer")):
-        # Aggregate activations across all samples for the current layer
-        activations_per_layer = np.concatenate([sample["activations"][:, layer_idx] for sample in samples], axis=0)
-
-        # Fit PCA for the current layer
+    if separate:
+        pcas = {}
+        for layer_idx, layer in enumerate(tqdm(activations.layers, desc="Computing PCA per layer")):
+            # Aggregate activations across all samples for the current layer
+            acts = np.concatenate([sample["activations"][:, layer_idx] for sample in samples], axis=0)
+            # Fit PCA for the current layer
+            pca = PCA(n_components=num_components)
+            pca.fit(acts)
+            pcas[layer] = pca
+        return pcas
+    else:
+        # Aggregate activations across all samples and all layers
+        acts = np.concatenate([sample["activations"] for sample in samples], axis=0)
+        acts = acts.reshape(-1, acts.shape[-1])
+        # Fit PCA for all layers
         pca = PCA(n_components=num_components)
-        pca.fit(activations_per_layer)
-        pcas[layer] = pca
-
-    return pcas
+        pca.fit(acts)
+        return defaultdict(lambda: pca)
 
 
 def plot_pca_explained_variance(pcas: dict[int, PCA]):
@@ -89,7 +97,7 @@ def plot_pca_explained_variance(pcas: dict[int, PCA]):
         positions = list(pcas.keys())
         explained_variance = [pcas[i].explained_variance_ratio_ for i in positions]
     explained_variance = np.stack(explained_variance, axis=1)
-    labels = [f"PC{i+1}" for i in range(len(explained_variance))]
+    labels = [f"PC{i + 1}" for i in range(len(explained_variance))]
 
     plt.figure(figsize=(6, 4))
     if explained_variance.shape[1] > 1:
@@ -115,6 +123,7 @@ def plot_pca_per_layer(
     exclude_special_tokens: bool | list[str] = True,
     token_embeddings: tuple[list[str], np.array] | None = None,
     token_embeddings_resolution: int = 50,
+    separate: bool = True,
     ncols: int = 5,
 ) -> None:
     """Visualize PCA projections per layer."""
@@ -126,13 +135,19 @@ def plot_pca_per_layer(
 
     num_layers = activations.num_layers
     nrows = math.ceil(num_layers / ncols)
-    fig = make_subplots(
-        rows=nrows,
-        cols=ncols,
-        subplot_titles=[f"Layer {layer}" for layer in activations.layers],
-        horizontal_spacing=0.16 / ncols,
-        vertical_spacing=0.24 / nrows,
-    )
+    if separate:
+        fig = make_subplots(
+            rows=nrows,
+            cols=ncols,
+            subplot_titles=[f"Layer {layer}" for layer in activations.layers],
+            horizontal_spacing=0.16 / ncols,
+            vertical_spacing=0.24 / nrows,
+            shared_xaxes="all",
+            shared_yaxes="all",
+        )
+    else:
+        fig = go.Figure()
+
     for layer_idx, layer in enumerate(tqdm(activations.layers, desc="Plotting PCA per layer")):
         row = (layer_idx // ncols) + 1
         col = (layer_idx % ncols) + 1
@@ -153,8 +168,8 @@ def plot_pca_per_layer(
                     hovertext=[escape_token(token) for token in tokens],
                     name="Token embeddings",
                 ),
-                row=row,
-                col=col,
+                row=row if separate else None,
+                col=col if separate else None,
             )
 
         for sample in samples:
@@ -177,8 +192,8 @@ def plot_pca_per_layer(
                     hovertext=get_tooltips_per_layer(sample, layer_idx, html=True),
                     showlegend=False,
                 ),
-                row=row,
-                col=col,
+                row=row if separate else None,
+                col=col if separate else None,
             )
 
             # Plot start and endpoint if there are multiple activations
@@ -193,17 +208,19 @@ def plot_pca_per_layer(
                         hoverinfo="skip",
                         showlegend=False,
                     ),
-                    row=row,
-                    col=col,
+                    row=row if separate else None,
+                    col=col if separate else None,
                 )
 
-    fig.update_xaxes(title_text="PC1", row=nrows)
-    fig.update_yaxes(title_text="PC2", col=1)
+    fig.update_xaxes(title_text="PC1", row=nrows if separate else None)
+    fig.update_yaxes(title_text="PC2", col=1 if separate else None)
     fig.update_layout(
-        width=300 * ncols,
-        height=300 * nrows,
+        width=300 * ncols if separate else 1000,
+        height=300 * nrows if separate else 800,
         title_text="PCA per layer",
+        legend=dict(groupclick="togglegroup" if separate else "toggleitem"),
         showlegend=False,
+        # showlegend=showlegend,
     )
     fig.show()
 
@@ -233,19 +250,18 @@ def compute_pca_per_token(
         num_tokens = samples[0]["activations"].shape[0]
         pcas = {}
         for token_idx in tqdm(range(num_tokens), desc="Computing PCA per token"):
-            acts = np.concatenate(
-                [sample["activations"][token_idx] for sample in samples]
-            )  # (num_samples, num_layers, hidden_size)
-            acts = acts.reshape(-1, acts.shape[-1])  # (num_samples * num_layers, hidden_size)
+            # Aggregate activations across all samples for the current token
+            acts = np.concatenate([sample["activations"][token_idx] for sample in samples], axis=0)
+            # Fit PCA for the current token
             pca = PCA(n_components=num_components)
             pca.fit(acts)
             pcas[token_idx] = pca
         return pcas
     else:
-        acts = np.concatenate(
-            [sample["activations"] for sample in samples]
-        )  # (num_samples * num_tokens, num_layers, hidden_size)
-        acts = acts.reshape(-1, acts.shape[-1])  # (num_samples * num_tokens * num_layers, hidden_size)
+        # Aggregate activations across all samples and all tokens
+        acts = np.concatenate([sample["activations"] for sample in samples], axis=0)
+        acts = acts.reshape(-1, acts.shape[-1])
+        # Fit PCA for all tokens
         pca = PCA(n_components=num_components)
         pca.fit(acts)
         return defaultdict(lambda: pca)
@@ -259,10 +275,10 @@ def plot_pca_per_token(
     exclude_special_tokens: bool | list[str] = True,
     token_embeddings: tuple[list[str], np.array] | None = None,
     token_embeddings_resolution: int = 50,
-    ncols: int = 3,
     separate: bool = False,
     colorby: Literal["auto", "token", "sample", "is_safe"] | None = "auto",
     showlegend: Literal["auto"] | bool = "auto",
+    ncols: int = 5,
 ):
     samples = activations.get(
         pool_method=pool_method,
@@ -300,8 +316,8 @@ def plot_pca_per_token(
             rows=nrows,
             cols=ncols,
             subplot_titles=subplot_titles,
-            horizontal_spacing=0.1 / ncols,
-            vertical_spacing=0.15 / nrows,
+            horizontal_spacing=0.16 / ncols,
+            vertical_spacing=0.24 / nrows,
             shared_xaxes="all",
             shared_yaxes="all",
         )
@@ -325,6 +341,9 @@ def plot_pca_per_token(
         for token_idx, (acts, token, token_pos) in enumerate(
             zip(sample["activations"], sample["tokens"], sample["token_positions"])
         ):
+            row = (token_idx // ncols) + 1
+            col = (token_idx % ncols) + 1
+
             if token_embeddings is not None and sample_idx == 0 and (token_idx == 0 or separate):
                 # Project token embeddings
                 tokens, embeddings = token_embeddings
@@ -342,25 +361,25 @@ def plot_pca_per_token(
                         name="Token embeddings",
                         showlegend=token_idx == 0,
                     ),
-                    row=(token_idx // ncols) + 1 if separate else None,
-                    col=(token_idx % ncols) + 1 if separate else None,
+                    row=row if separate else None,
+                    col=col if separate else None,
                 )
 
             # Project activations
             activations_proj = pcas[token_idx].transform(acts)
             # Plot activations
             if separate:
-                text = [str(layer) for layer in activations.layers]
-                legend_group = sample["id"] if len(samples) > 1 else None
-                legend_group_title = None
-                name = sample["id"]
-                show_legend = token_idx == 0
+                trace_text = [str(layer) for layer in activations.layers]
+                trace_legendgroup = sample["id"] if len(samples) > 1 else None
+                trace_legendgrouptitle = None
+                trace_name = sample["id"]
+                trace_showlegend = token_idx == 0
             else:
-                text = [f"{token_pos + 1}.{layer}" for layer in activations.layers]
-                legend_group = sample["id"] if len(samples) > 1 else None
-                legend_group_title = sample["id"] if len(samples) > 1 else None
-                name = f"{token_pos + 1}: {escape_token(token)}"
-                show_legend = True
+                trace_text = [f"{token_pos + 1}.{layer}" for layer in activations.layers]
+                trace_legendgroup = sample["id"] if len(samples) > 1 else None
+                trace_legendgrouptitle = sample["id"] if len(samples) > 1 else None
+                trace_name = f"{token_pos + 1}: {escape_token(token)}"
+                trace_showlegend = True
             fig.add_trace(
                 go.Scatter(
                     x=activations_proj[:, 0],
@@ -368,25 +387,25 @@ def plot_pca_per_token(
                     mode="lines+markers+text",
                     marker=dict(color=color, size=4),
                     line=dict(color=color, width=1),
-                    text=text,
+                    text=trace_text,
                     textposition="top center",
                     textfont=dict(size=6),
                     hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
                     hovertext=get_tooltips_per_token(sample, token_idx, html=True),
-                    legendgroup=legend_group,
-                    legendgrouptitle_text=legend_group_title,
-                    name=name,
-                    showlegend=show_legend,
+                    legendgroup=trace_legendgroup,
+                    legendgrouptitle_text=trace_legendgrouptitle,
+                    name=trace_name,
+                    showlegend=trace_showlegend,
                 ),
-                row=(token_idx // ncols) + 1 if separate else None,
-                col=(token_idx % ncols) + 1 if separate else None,
+                row=row if separate else None,
+                col=col if separate else None,
             )
 
     fig.update_xaxes(title_text="PC1", row=nrows if separate else None)
     fig.update_yaxes(title_text="PC2", col=1 if separate else None)
     fig.update_layout(
-        width=500 * ncols if separate else 1000,
-        height=400 * nrows if separate else 800,
+        width=300 * ncols if separate else 1000,
+        height=300 * nrows if separate else 800,
         title="PCA per token",
         legend=dict(groupclick="togglegroup" if separate else "toggleitem"),
         showlegend=showlegend,

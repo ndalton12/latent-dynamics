@@ -277,6 +277,9 @@ class Activations:
 
     def select(self, sample_ids: list[str] | None = None, layers: list[int] | None = None) -> "Activations":
         """Return a new Activations object containing only the specified samples and/or layers."""
+        if sample_ids is None and layers is None:
+            return self
+
         samples = self.samples
         activations = self.activations
         topk = self.topk
