@@ -20,7 +20,7 @@ def get_activation_folders(path: Path):
     return sorted((str(p) for p in path.glob("**/*") if (p / "samples.json").exists()), key=natsort_keygen())
 
 
-class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
+class ActivationsExtractorWidget(widgets.VBox, widgets.ValueWidget):
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
     activations: Activations | None = None
 
@@ -53,7 +53,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         )
         self.w_custom_response = widgets.Text(value="", description="Custom")
         self.w_apply_chat_template = widgets.Checkbox(value=apply_chat_template, description="Apply chat template")
-        self.btn_extract_activations = widgets.Button(description="Extract activations", button_style="primary")
+        self.btn_extract = widgets.Button(description="Extract activations", button_style="primary")
         col_extract_activations = widgets.VBox(
             [
                 self.w_model,
@@ -62,17 +62,9 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
                 self.w_include_response,
                 self.w_custom_response,
                 self.w_apply_chat_template,
-                self.btn_extract_activations,
+                self.btn_extract,
             ]
         )
-
-        self.w_topk_model = widgets.Dropdown(options=models, value=model, description="Model")
-        self.w_topk_layer = widgets.SelectMultiple(description="Layers")
-        self.w_topk_k = widgets.IntText(value=10, min=1, description="k")
-        self.btn_extract_topk = widgets.Button(
-            description="Extract top-k tokens", button_style="primary", disabled=True
-        )
-        col_extract_topk = widgets.VBox([self.w_topk_model, self.w_topk_layer, self.w_topk_k, self.btn_extract_topk])
 
         self.w_path = widgets.Combobox(options=get_activation_folders(self.search_path), description="Path")
         self.btn_load = widgets.Button(description="Load activations", button_style="primary")
@@ -84,7 +76,7 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             ]
         )
 
-        children = [widgets.HBox([col_extract_activations, col_extract_topk]), col_load]
+        children = [col_extract_activations, col_load]
         if out is None:
             self.out = widgets.Output()
             children.append(self.out)
@@ -96,22 +88,13 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         self.w_include_response.observe(self._update_custom_response, names="value")
         self._update_custom_response()
 
-        self.btn_extract_activations.on_click(self._do_extract_activations)
+        self.btn_extract.on_click(self._do_extract)
         self.btn_save.on_click(self._do_save)
         self.btn_load.on_click(self._do_load)
-        self.btn_extract_topk.on_click(self._do_extract_topk)
 
     def _update_value(self, activations: Activations | None):
         self.activations = activations
         self.value = not self.value
-
-        # Update topk layer options
-        if activations is not None:
-            self.w_topk_layer.options = activations.layers
-            self.w_topk_layer.value = ()
-        else:
-            self.w_topk_layer.options = []
-            self.w_topk_layer.value = ()
 
     def _update_custom_response(self, *args):
         if self.w_include_response.value == "custom":
@@ -121,19 +104,17 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
 
     @contextlib.contextmanager
     def _update_buttons(self):
-        self.btn_extract_activations.disabled = True
+        self.btn_extract.disabled = True
         self.btn_save.disabled = True
         self.btn_load.disabled = True
-        self.btn_extract_topk.disabled = True
         try:
             yield
         finally:
-            self.btn_extract_activations.disabled = False
+            self.btn_extract.disabled = False
             self.btn_save.disabled = self.activations is None
             self.btn_load.disabled = False
-            self.btn_extract_topk.disabled = self.activations is None
 
-    def _do_extract_activations(self, *args):
+    def _do_extract(self, *args):
         with self._update_buttons(), self.out:
             self.out.clear_output(wait=True)
 
@@ -195,18 +176,6 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
             # Update load options
             self.w_path.options = get_activation_folders(self.search_path)
 
-    def _do_extract_topk(self, *args):
-        if self.activations is None:
-            return
-
-        with self._update_buttons(), self.out:
-            self.out.clear_output(wait=True)
-
-            # Extract topk tokens
-            model, tokenizer = load_model_and_tokenizer(self.w_topk_model.value)
-            for layer in self.w_topk_layer.value:
-                self.activations.extract_topk(model, tokenizer, layer=layer, k=self.w_topk_k.value)
-
     @property
     def model_name(self) -> str:
         return self.w_model.value
@@ -238,7 +207,77 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.widget_description.Descri
         return self.w_path.value
 
 
-class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
+class TopKExtractorWidget(widgets.VBox, widgets.ValueWidget):
+    value = Bool(False, help="Dummy trait to trigger observers on changes.")
+    activations: Activations | None = None
+
+    def __init__(self, out: widgets.Output | None = None, **kwargs):
+        models = list(MODEL_REGISTRY.keys())
+
+        # Set defaults
+        model = kwargs.get("model", models[0])
+        k = kwargs.get("k", 10)
+
+        # Create widgets
+        self.w_model = widgets.Dropdown(options=models, value=model, description="Model")
+        self.w_layers = widgets.SelectMultiple(description="Layers")
+        self.w_k = widgets.IntText(value=k, min=1, description="k")
+        self.btn_extract = widgets.Button(description="Extract top-k tokens", button_style="primary", disabled=True)
+
+        children = [self.w_model, self.w_layers, self.w_k, self.btn_extract]
+        if out is None:
+            self.out = widgets.Output()
+            children.append(self.out)
+        else:
+            self.out = out
+        super().__init__(children=children)
+
+        # Register handlers
+        self.btn_extract.on_click(self._do_extract)
+
+    def set_activations(self, activations: Activations | None):
+        self.activations = activations
+
+        if activations is None:
+            self.w_layers.options = []
+        else:
+            self.w_layers.options = activations.layers
+        self.btn_extract.disabled = self.activations is None
+
+    @contextlib.contextmanager
+    def _update_buttons(self):
+        self.btn_extract.disabled = True
+        try:
+            yield
+        finally:
+            self.btn_extract.disabled = self.activations is None
+
+    def _do_extract(self, *args):
+        if self.activations is None:
+            return
+
+        with self._update_buttons(), self.out:
+            self.out.clear_output(wait=True)
+
+            # Extract topk tokens
+            model, tokenizer = load_model_and_tokenizer(self.model_name)
+            for layer in self.layers:
+                self.activations.extract_topk(model, tokenizer, layer=layer, k=self.k)
+
+    @property
+    def model_name(self) -> str:
+        return self.w_model.value
+
+    @property
+    def layers(self) -> list[int]:
+        return list(self.w_layers.value)
+
+    @property
+    def k(self) -> int:
+        return self.w_k.value
+
+
+class ActivationsSelectorWidget(widgets.VBox, widgets.ValueWidget):
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
 
     def __init__(self, **kwargs):
@@ -314,16 +353,21 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
             w.disabled = False
         self._links.clear()
 
-    def set_activations(self, activations: Activations):
-        sample_ids_safe = activations.samples_safe.index
-        sample_ids_unsafe = activations.samples_unsafe.index
-        self.w_samples_safe.options = [
-            (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(sample_ids_safe)
-        ]
-        self.w_samples_unsafe.options = [
-            (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(sample_ids_unsafe)
-        ]
-        self.w_layers.options = activations.layers
+    def set_activations(self, activations: Activations | None):
+        if activations is None:
+            self.w_samples_safe.options = []
+            self.w_samples_unsafe.options = []
+            self.w_layers.options = []
+        else:
+            sample_ids_safe = activations.samples_safe.index
+            sample_ids_unsafe = activations.samples_unsafe.index
+            self.w_samples_safe.options = [
+                (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(sample_ids_safe)
+            ]
+            self.w_samples_unsafe.options = [
+                (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(sample_ids_unsafe)
+            ]
+            self.w_layers.options = activations.layers
 
     @property
     def samples(self) -> list[str]:
@@ -351,7 +395,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         return self.w_exclude_special_tokens.value
 
 
-class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
+class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.ValueWidget):
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
     token_embeddings: tuple[list[str], np.array] | None = None
 
@@ -416,7 +460,7 @@ class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.Descr
         return self.w_max_tokens.value
 
 
-class ReadersSelectorWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
+class ReadersSelectorWidget(widgets.VBox, widgets.ValueWidget):
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
 
     def __init__(self, **kwargs):
@@ -448,3 +492,30 @@ class ReadersSelectorWidget(widgets.VBox, widgets.widget_description.Description
         return [self.w_x.value, self.w_y.value]
 
 
+class AdvancedOptionsWidget(widgets.VBox, widgets.ValueWidget):
+    value = Bool(False, help="Flag whether advanced options are shown or not.")
+
+    def __init__(self, children: list[widgets.Widget], **kwargs):
+        # Set defaults
+        value = kwargs.get("value", False)
+
+        # Create widgets
+        self.w_show = widgets.Checkbox(value=value, indent=False, description="Show advanced options")
+        self.w_advanced_options = widgets.VBox(children)
+        super().__init__(
+            children=[
+                self.w_show,
+                self.w_advanced_options,
+            ]
+        )
+
+        # Register handlers
+        self.w_show.observe(self._update_value, names="value")
+        self._update_value()
+
+    def _update_value(self, *args):
+        self.value = self.w_show.value
+        if self.w_show.value:
+            self.w_advanced_options.layout.display = None  # show the widget
+        else:
+            self.w_advanced_options.layout.display = "none"  # hide the widget
