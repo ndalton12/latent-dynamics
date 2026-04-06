@@ -492,30 +492,17 @@ class ReadersSelectorWidget(widgets.VBox, widgets.ValueWidget):
         self.value = not self.value
 
 
-class AdvancedOptionsWidget(widgets.VBox, widgets.ValueWidget):
-    value = Bool(False, help="Flag whether advanced options are shown or not.")
-
-    def __init__(self, children: list[widgets.Widget], **kwargs):
-        # Set defaults
-        value = kwargs.get("value", False)
-
-        # Create widgets
-        self.w_show = widgets.Checkbox(value=value, indent=False, description="Show advanced options")
-        self.w_advanced_options = widgets.VBox(children)
-        super().__init__(
-            children=[
-                self.w_show,
-                self.w_advanced_options,
-            ]
-        )
+class ShowHideCheckbox(widgets.Checkbox):
+    def __init__(self, target: widgets.Widget, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.target = target
 
         # Register handlers
-        self.w_show.observe(self._update_value, names="value")
-        self._update_value()
+        self.observe(self._update_target, names="value")
+        self._update_target()
 
-    def _update_value(self, *args):
-        self.value = self.w_show.value
-        if self.w_show.value:
-            self.w_advanced_options.layout.display = None  # show the widget
+    def _update_target(self, *args):
+        if self.value:
+            self.target.layout.display = None  # show the widget
         else:
-            self.w_advanced_options.layout.display = "none"  # hide the widget
+            self.target.layout.display = "none"  # hide the widget
