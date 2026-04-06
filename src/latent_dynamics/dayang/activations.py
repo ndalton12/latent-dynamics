@@ -40,8 +40,8 @@ def _pool(
     tokens: list[str] | np.ndarray,
     *arrays: list[Any] | np.ndarray,
     pool_method: PoolMethod = "all",
-    exclude_bos: bool = True,
-    exclude_special_tokens: bool | list[str] = True,
+    exclude_bos: bool = False,
+    exclude_special_tokens: bool | list[str] = False,
 ) -> tuple[np.ndarray, list[str], list[int | None]]:
     activations = np.asarray(activations)
     tokens = np.asarray(tokens)
@@ -216,8 +216,8 @@ class Activations:
         sample_ids: str | list[str] | None = None,
         layers: int | list[int] | None = None,
         pool_method: PoolMethod = "all",
-        exclude_bos: bool = True,
-        exclude_special_tokens: bool | list[str] = True,
+        exclude_bos: bool = False,
+        exclude_special_tokens: bool | list[str] = False,
     ) -> list[dict[str, Any]]:
         """Get activations for the specified samples and layers over the pooled tokens."""
         if sample_ids is None:
