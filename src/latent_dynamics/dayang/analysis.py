@@ -115,7 +115,8 @@ class PCAReader(Reader):
 
         # Fit PCA
         pca = PCA(n_components=self.num_components)
-        pca.fit(X)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pca.fit(X)
         w = pca.components_
         b = np.zeros_like(w)  # preserve origin by setting bias to zero
 
