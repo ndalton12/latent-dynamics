@@ -3,46 +3,60 @@ from __future__ import annotations
 import html as _html
 import textwrap
 from collections import OrderedDict
-from typing import Callable
+from functools import wraps
+from typing import Callable, ParamSpec, TypeVar
 
 import numpy as np
 import pandas as pd
 
+HashableEncoders = dict[type, Callable[[object], object]]
+P = ParamSpec("P")
+R = TypeVar("R")
 
-def to_hashable(obj, encoders: dict[type, Callable] | None = None):
+
+def _to_hashable(obj, encoders: HashableEncoders | None = None):
     """Recursively converts mutable objects into hashable ones."""
     if encoders is not None and type(obj) in encoders:
         obj = encoders[type(obj)](obj)
-        return to_hashable(obj, encoders=encoders)
+        return _to_hashable(obj, encoders=encoders)
     elif isinstance(obj, (list, tuple)):
-        return tuple(to_hashable(e, encoders=encoders) for e in obj)
+        return tuple(_to_hashable(e, encoders=encoders) for e in obj)
     elif isinstance(obj, dict):
-        return frozenset((k, to_hashable(v, encoders=encoders)) for k, v in obj.items())
+        return frozenset((k, _to_hashable(v, encoders=encoders)) for k, v in obj.items())
     elif isinstance(obj, set):
-        return frozenset(to_hashable(e, encoders=encoders) for e in obj)
+        return frozenset(_to_hashable(e, encoders=encoders) for e in obj)
     return obj
 
 
 class Cache:
-    def __init__(self, maxsize: int | None = None, encoders: dict[type, Callable] | None = None):
+    def __init__(self, maxsize: int | None = None, encoders: HashableEncoders | None = None):
         self.maxsize = maxsize
         self.encoders = encoders
+
         self._cache = OrderedDict()
 
-    def __call__(self, func, *args, **kwargs):
-        key = (func, to_hashable(args, encoders=self.encoders), to_hashable(kwargs, encoders=self.encoders))
-        if key in self._cache:
-            # Return from cache
-            self._cache.move_to_end(key)
-            return self._cache[key]
-        else:
-            # Evaluate function and store in cache
-            result = func(*args, **kwargs)
-            self._cache[key] = result
-            # Remove least recently used item
-            if self.maxsize is not None and len(self._cache) > self.maxsize:
-                self._cache.popitem(last=False)
-            return result
+    def __call__(self, func: Callable[P, R], encoders: HashableEncoders | None = None) -> Callable[P, R]:
+        encoders = {**(self.encoders or {}), **(encoders or {})}
+
+        @wraps(func)
+        def _wrapped_fn(*args: P.args, **kwargs: P.kwargs) -> R:
+            # Create hashable key from function and arguments
+            key = _to_hashable((func, args, kwargs), encoders=encoders)
+            if key in self._cache:
+                # Return result from cache
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            else:
+                # Evaluate function and store result in cache
+                result = func(*args, **kwargs)
+                self._cache[key] = result
+                # Remove least recently used result
+                if self.maxsize is not None and len(self._cache) > self.maxsize:
+                    self._cache.popitem(last=False)
+                # Return result
+                return result
+
+        return _wrapped_fn
 
     def clear(self):
         self._cache.clear()
