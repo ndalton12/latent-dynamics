@@ -312,8 +312,8 @@ def analyze_per_layer(
     activations: Activations,
     readers: list[str | Reader] = ["pca", "pca"],
     pool_method: PoolMethod = "all",
-    exclude_bos: bool = True,
-    exclude_special_tokens: bool | list[str] = True,
+    exclude_bos: bool = False,
+    exclude_special_tokens: bool | list[str] = False,
     separate: bool = True,
 ) -> dict[int, ActivationReaders]:
     """Train sequential readers per layer."""
@@ -357,8 +357,8 @@ def analyze_per_token(
     activations: Activations,
     readers: list[str | Reader] = ["pca", "pca"],
     pool_method: PoolMethod = "all",
-    exclude_bos: bool = True,
-    exclude_special_tokens: bool | list[str] = True,
+    exclude_bos: bool = False,
+    exclude_special_tokens: bool | list[str] = False,
     separate: bool = True,
 ) -> dict[int, ActivationReaders]:
     """Train sequential readers per token position."""

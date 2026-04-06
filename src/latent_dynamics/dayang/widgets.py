@@ -32,9 +32,9 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.ValueWidget):
         # Set defaults
         model = kwargs.get("model", models[0])
         dataset = kwargs.get("dataset", datasets[0])
-        max_samples = kwargs.get("max_samples", 200)
+        max_samples = kwargs.get("max_samples", 500)
         include_response = kwargs.get("include_response", False)
-        apply_chat_template = kwargs.get("apply_chat_template", False)
+        apply_chat_template = kwargs.get("apply_chat_template", True)
 
         # Create widgets
         self.w_model = widgets.Dropdown(options=models, value=model, description="Model")
@@ -347,11 +347,11 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.ValueWidget):
 
     def __init__(self, **kwargs):
         # Set defaults
-        pool_method = kwargs.get("pool_method", "slice")
+        pool_method = kwargs.get("pool_method", "last")
         pool_index = kwargs.get("pool_index", "-1")
         pool_slice = kwargs.get("pool_slice", "-1::")
-        exclude_bos = kwargs.get("exclude_bos", True)
-        exclude_special_tokens = kwargs.get("exclude_special_tokens", True)
+        exclude_bos = kwargs.get("exclude_bos", False)
+        exclude_special_tokens = kwargs.get("exclude_special_tokens", False)
 
         # Create widgets
         self.w_samples_safe = widgets.SelectMultiple(description="Safe samples")
