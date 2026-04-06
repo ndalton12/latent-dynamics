@@ -1410,7 +1410,7 @@ requires-dist = [
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "natsort", specifier = ">=8.4.0" },
-    { name = "numpy", specifier = ">=2.0" },
+    { name = "numpy" },
     { name = "plotly", specifier = ">=6.5.2" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "seaborn", specifier = ">=0.13.2" },
