@@ -24,7 +24,7 @@ from latent_dynamics.dayang.utils import (
 from latent_dynamics.dayang.analysis import ActivationReaders
 
 
-def plot_reader_statistics(readers: dict[int, ActivationReaders]):
+def plot_reader_statistics(readers: dict[int, ActivationReaders], xlabel: str = "Position"):
     """Plot explained variance and accuracy of readers."""
     if isinstance(readers, defaultdict):
         positions = ["all"]
@@ -38,7 +38,7 @@ def plot_reader_statistics(readers: dict[int, ActivationReaders]):
 
     # Plot explained variance
     ax = axes[0]
-    if explained_variance.shape[1] > 1:
+    if len(positions) > 1:
         ax.stackplot(positions, explained_variance, labels=labels)
     else:
         bottom = np.zeros_like(explained_variance[0])
@@ -48,13 +48,13 @@ def plot_reader_statistics(readers: dict[int, ActivationReaders]):
         ax.set_xlim(-2.5, 2.5)
     ax.set_ylim(0, 1)
     ax.set_title("Explained variance by reader")
-    ax.set_xlabel("Position")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("Percentage of explained variance")
     ax.legend()
 
     # Plot accuracy
     ax = axes[1]
-    if accuracy.shape[1] > 1:
+    if len(positions) > 1:
         for y, label in zip(accuracy, labels):
             ax.plot(positions, y, label=label)
     else:
@@ -68,7 +68,8 @@ def plot_reader_statistics(readers: dict[int, ActivationReaders]):
     ax.axhline(0.5, color="gray", linestyle="--", label="Random guessing")
     ax.set_ylim(0, 1)
     ax.set_title("Accuracy of reader")
-    ax.set_xlabel("Position")
+    if len(positions) > 1:
+        ax.set_xlabel(xlabel)
     ax.set_ylabel("Accuracy")
     ax.legend()
 
