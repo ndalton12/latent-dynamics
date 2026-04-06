@@ -63,6 +63,17 @@ def get_torch_dtype(dtype: torch.dtype | str | None) -> torch.dtype | str | None
     return dtype
 
 
+def get_device(device: str | None = None) -> str:
+    """Resolve a device string, defaulting to 'cuda' if available, then 'mps', then 'cpu'."""
+    if device is not None:
+        return device
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def load_model_and_tokenizer(
     model_spec: ModelSpec | str,
     device: str | None = None,
@@ -70,6 +81,9 @@ def load_model_and_tokenizer(
     """Load model and tokenizer from a ModelSpec."""
     if isinstance(model_spec, str):
         model_spec = MODEL_REGISTRY[model_spec]
+
+    device = get_device(device)
+    dtype = get_torch_dtype(model_spec.dtype)
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_spec.path, **(model_spec.load_tokenizer_kwargs or {}))
@@ -79,7 +93,7 @@ def load_model_and_tokenizer(
     # Load model
     model = AutoModelForCausalLM.from_pretrained(
         model_spec.path,
-        dtype=get_torch_dtype(model_spec.dtype),
+        dtype=dtype,
         low_cpu_mem_usage=True,
         **(model_spec.load_model_kwargs or {}),
     )
