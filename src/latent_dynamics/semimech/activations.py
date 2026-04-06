@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from functools import wraps
 from pathlib import Path
 from typing import Any, Literal
@@ -193,7 +193,7 @@ class Activations:
         for layer, acts_per_layer in tqdm(self.activations.items(), desc="Saving activations"):
             np.savez_compressed(path / f"layer_{layer}.npz", **acts_per_layer)
         # Save topk
-        pd.DataFrame(self.topk).to_json(path / "topk.json", indent=2)
+        pd.DataFrame(self.topk).map(lambda x: asdict(x)).to_json(path / "topk.json", indent=2)
 
     @classmethod
     def load(cls, path: str | Path) -> "Activations":
