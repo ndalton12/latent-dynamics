@@ -10,7 +10,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from tqdm.auto import tqdm
 
-from latent_dynamics.dayang.activations import Activations, PoolMethod
+from latent_dynamics.semimech.activations import Activations, PoolMethod
 
 
 def _normalize(w: np.ndarray, axis: int = 0, squared: bool = False) -> np.ndarray:

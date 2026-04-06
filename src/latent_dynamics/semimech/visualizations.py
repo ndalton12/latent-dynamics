@@ -14,15 +14,15 @@ from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
 from matplotlib.colors import to_rgba
 
-from latent_dynamics.dayang.activations import Activations, PoolMethod
-from latent_dynamics.dayang.utils import (
+from latent_dynamics.semimech.activations import Activations, PoolMethod
+from latent_dynamics.semimech.utils import (
     escape_token,
     get_tooltips_per_layer,
     get_tooltips_per_token,
     select,
     select_from_grid,
 )
-from latent_dynamics.dayang.analysis import ActivationReaders
+from latent_dynamics.semimech.analysis import ActivationReaders
 
 
 def to_rgba_str(color, alpha=1.0):

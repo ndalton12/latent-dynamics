@@ -6,10 +6,10 @@ import numpy as np
 from natsort import natsort_keygen
 from traitlets import Bool
 
-from latent_dynamics.dayang.activations import Activations, PoolMethod, extract_activations
-from latent_dynamics.dayang.data import DATASET_REGISTRY, load_dataset_from_spec
-from latent_dynamics.dayang.model import MODEL_REGISTRY, get_token_embeddings, load_model_and_tokenizer
-from latent_dynamics.dayang.utils import select
+from latent_dynamics.semimech.activations import Activations, PoolMethod, extract_activations
+from latent_dynamics.semimech.data import DATASET_REGISTRY, load_dataset_from_spec
+from latent_dynamics.semimech.model import MODEL_REGISTRY, get_token_embeddings, load_model_and_tokenizer
+from latent_dynamics.semimech.utils import select
 
 
 def _str_to_slice(s: str) -> slice | None:
