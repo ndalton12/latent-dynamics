@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
+from matplotlib.colors import to_rgba
 
 from latent_dynamics.dayang.activations import Activations, PoolMethod
 from latent_dynamics.dayang.utils import (
@@ -22,6 +23,11 @@ from latent_dynamics.dayang.utils import (
     select_from_grid,
 )
 from latent_dynamics.dayang.analysis import ActivationReaders
+
+
+def to_rgba_str(color, alpha=1.0):
+    rgba = to_rgba(color, alpha)
+    return f"rgba({int(rgba[0] * 255)}, {int(rgba[1] * 255)}, {int(rgba[2] * 255)}, {rgba[3]})"
 
 
 def plot_reader_statistics(readers: dict[int, ActivationReaders], xlabel: str = "Position"):
@@ -165,6 +171,7 @@ def plot_per_layer(
             acts_proj = readers[layer].transform(acts)
 
             # Plot activations
+            symbol = "x" if sample["is_adversarial"] else "circle"
             if separate:
                 trace_legendgroup = sample["id"] if len(samples) > 1 else None
                 trace_legendgrouptitle = None
@@ -180,8 +187,8 @@ def plot_per_layer(
                     x=acts_proj[:, 0],
                     y=acts_proj[:, 1],
                     mode="lines+markers",
-                    marker=dict(color=color, size=4, symbol="x" if sample["is_adversarial"] else "circle"),
-                    line=dict(color=color, width=1),
+                    marker=dict(color=to_rgba_str(color, 0.5), size=4, symbol=symbol),
+                    line=dict(color=to_rgba_str(color, 0.5), width=1),
                     hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
                     hovertext=get_tooltips_per_layer(sample, layer_idx, html=True),
                     legendgroup=trace_legendgroup,
@@ -328,6 +335,7 @@ def plot_per_token(
             # Plot activations
             token = sample["tokens"][token_idx]
             token_pos = sample["token_positions"][token_idx]
+            symbol = "x" if sample["is_adversarial"] else "circle"
             if separate:
                 trace_text = [str(layer) for layer in activations.layers]
                 trace_legendgroup = sample["id"] if len(samples) > 1 else None
@@ -345,8 +353,8 @@ def plot_per_token(
                     x=acts_proj[:, 0],
                     y=acts_proj[:, 1],
                     mode="lines+markers+text",
-                    marker=dict(color=color, size=4, symbol="x" if sample["is_adversarial"] else "circle"),
-                    line=dict(color=color, width=1),
+                    marker=dict(color=to_rgba_str(color, 0.5), size=4, symbol=symbol),
+                    line=dict(color=to_rgba_str(color, 0.5), width=1),
                     text=trace_text,
                     textposition="top center",
                     textfont=dict(size=6),
