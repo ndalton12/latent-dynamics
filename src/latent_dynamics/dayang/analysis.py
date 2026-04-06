@@ -296,7 +296,7 @@ class ActivationReaders(BaseEstimator, TransformerMixin):
         return X_proj
 
 
-def compute_per_layer(
+def analyze_per_layer(
     activations: Activations,
     readers: list[str | Reader] = ["pca", "pca"],
     pool_method: PoolMethod = "all",
@@ -340,7 +340,7 @@ def compute_per_layer(
         return defaultdict(lambda: model)
 
 
-def compute_per_token(
+def analyze_per_token(
     activations: Activations,
     readers: list[str | Reader] = ["pca", "pca"],
     pool_method: PoolMethod = "all",
