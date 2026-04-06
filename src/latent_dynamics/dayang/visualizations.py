@@ -159,10 +159,13 @@ def plot_per_layer(
         for sample_idx, sample in enumerate(samples):
             if color_by == "layer":
                 color = colors[layer_idx % len(colors)]
+                alpha = 1.0
             elif color_by == "sample":
                 color = colors[sample_idx % len(colors)]
+                alpha = 1.0
             elif color_by == "is_safe":
                 color = "green" if sample["is_safe"] else "red"
+                alpha = 0.25
             else:
                 raise ValueError(f"Invalid colorby value: {color_by}")
 
@@ -187,8 +190,8 @@ def plot_per_layer(
                     x=acts_proj[:, 0],
                     y=acts_proj[:, 1],
                     mode="lines+markers",
-                    marker=dict(color=to_rgba_str(color, 0.5), size=4, symbol=symbol),
-                    line=dict(color=to_rgba_str(color, 0.5), width=1),
+                    marker=dict(color=to_rgba_str(color, alpha), size=4, symbol=symbol),
+                    line=dict(color=to_rgba_str(color, alpha), width=1),
                     hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
                     hovertext=get_tooltips_per_layer(sample, layer_idx, html=True),
                     legendgroup=trace_legendgroup,
@@ -276,7 +279,7 @@ def plot_per_token(
         for token_idx in range(num_tokens):
             tokens = list(set(escape_token(sample["tokens"][token_idx]) for sample in samples))
             subplot_titles.append(
-                f"Tokens: {', '.join(tokens) if len(tokens) <= 3 else ', '.join(tokens[:2]) + ', ...'}"
+                f"{token_idx + 1}: {', '.join(tokens) if len(tokens) <= 2 else ', '.join(tokens[:2]) + ', ...'}"
             )
         fig = make_subplots(
             rows=nrows,
@@ -301,10 +304,13 @@ def plot_per_token(
         for sample_idx, sample in enumerate(samples):
             if color_by == "token":
                 color = colors[token_idx % len(colors)]
+                alpha = 1.0
             elif color_by == "sample":
                 color = colors[sample_idx % len(colors)]
+                alpha = 1.0
             elif color_by == "is_safe":
                 color = "green" if sample["is_safe"] else "red"
+                alpha = 0.25
             else:
                 raise ValueError(f"Invalid colorby value: {color_by}")
 
@@ -353,8 +359,8 @@ def plot_per_token(
                     x=acts_proj[:, 0],
                     y=acts_proj[:, 1],
                     mode="lines+markers+text",
-                    marker=dict(color=to_rgba_str(color, 0.5), size=4, symbol=symbol),
-                    line=dict(color=to_rgba_str(color, 0.5), width=1),
+                    marker=dict(color=to_rgba_str(color, alpha), size=4, symbol=symbol),
+                    line=dict(color=to_rgba_str(color, alpha), width=1),
                     text=trace_text,
                     textposition="top center",
                     textfont=dict(size=6),
