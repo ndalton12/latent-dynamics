@@ -323,10 +323,7 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.widget_description.Descrip
         self.w_samples_unsafe.options = [
             (f"{sample_idx + 1}: {sample_id}", sample_id) for sample_idx, sample_id in enumerate(sample_ids_unsafe)
         ]
-        self.w_samples_safe.value = ()
-        self.w_samples_unsafe.value = ()
         self.w_layers.options = activations.layers
-        self.w_layers.value = ()
 
     @property
     def samples(self) -> list[str]:
@@ -417,3 +414,37 @@ class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.widget_description.Descr
     @property
     def max_tokens(self) -> int:
         return self.w_max_tokens.value
+
+
+class ReadersSelectorWidget(widgets.VBox, widgets.widget_description.DescriptionWidget, widgets.ValueWidget):
+    value = Bool(False, help="Dummy trait to trigger observers on changes.")
+
+    def __init__(self, **kwargs):
+        # Set defaults
+        x = kwargs.get("x", "pca")
+        y = kwargs.get("y", "pca")
+
+        # Create widgets
+        options = [
+            ("PCA", "pca"),
+            ("PCA (standardized)", "pca_standardized"),
+            ("Linear Probe", "linear_probe"),
+            ("Difference in Mean", "difference_in_mean"),
+        ]
+        self.w_x = widgets.Dropdown(options=options, value=x, description="x")
+        self.w_y = widgets.Dropdown(options=options, value=y, description="y")
+
+        super().__init__(children=[self.w_x, self.w_y])
+
+        # Register handlers
+        self.w_x.observe(self._update_value, names="value")
+        self.w_y.observe(self._update_value, names="value")
+
+    def _update_value(self, *args):
+        self.value = not self.value
+
+    @property
+    def readers(self) -> list[str]:
+        return [self.w_x.value, self.w_y.value]
+
+
