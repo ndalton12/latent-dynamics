@@ -92,6 +92,36 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.ValueWidget):
         self.btn_save.on_click(self._do_save)
         self.btn_load.on_click(self._do_load)
 
+    @property
+    def model_name(self) -> str:
+        return self.w_model.value
+
+    @property
+    def dataset_name(self) -> str:
+        return self.w_dataset.value
+
+    @property
+    def max_samples(self) -> int | None:
+        if self.w_max_samples.value > 0:
+            return self.w_max_samples.value
+        else:
+            return None
+
+    @property
+    def include_response(self) -> bool | str:
+        if self.w_include_response.value == "custom":
+            return self.w_custom_response.value
+        else:
+            return self.w_include_response.value
+
+    @property
+    def apply_chat_template(self) -> bool:
+        return self.w_apply_chat_template.value
+
+    @property
+    def path(self) -> str:
+        return self.w_path.value
+
     def _update_value(self, activations: Activations | None):
         self.activations = activations
         self.value = not self.value
@@ -176,36 +206,6 @@ class ActivationsExtractorWidget(widgets.VBox, widgets.ValueWidget):
             # Update load options
             self.w_path.options = get_activation_folders(self.search_path)
 
-    @property
-    def model_name(self) -> str:
-        return self.w_model.value
-
-    @property
-    def dataset_name(self) -> str:
-        return self.w_dataset.value
-
-    @property
-    def max_samples(self) -> int | None:
-        if self.w_max_samples.value > 0:
-            return self.w_max_samples.value
-        else:
-            return None
-
-    @property
-    def include_response(self) -> bool | str:
-        if self.w_include_response.value == "custom":
-            return self.w_custom_response.value
-        else:
-            return self.w_include_response.value
-
-    @property
-    def apply_chat_template(self) -> bool:
-        return self.w_apply_chat_template.value
-
-    @property
-    def path(self) -> str:
-        return self.w_path.value
-
 
 class TopKExtractorWidget(widgets.VBox, widgets.ValueWidget):
     value = Bool(False, help="Dummy trait to trigger observers on changes.")
@@ -234,6 +234,18 @@ class TopKExtractorWidget(widgets.VBox, widgets.ValueWidget):
 
         # Register handlers
         self.btn_extract.on_click(self._do_extract)
+
+    @property
+    def model_name(self) -> str:
+        return self.w_model.value
+
+    @property
+    def layers(self) -> list[int]:
+        return list(self.w_layers.value)
+
+    @property
+    def k(self) -> int:
+        return self.w_k.value
 
     def set_activations(self, activations: Activations | None):
         self.activations = activations
@@ -264,17 +276,70 @@ class TopKExtractorWidget(widgets.VBox, widgets.ValueWidget):
             for layer in self.layers:
                 self.activations.extract_topk(model, tokenizer, layer=layer, k=self.k)
 
+
+class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.ValueWidget):
+    value = Bool(False, help="Dummy trait to trigger observers on changes.")
+    token_embeddings: tuple[list[str], np.array] | None = None
+
+    def __init__(self, out: widgets.Output | None = None, **kwargs):
+        models = list(MODEL_REGISTRY.keys())
+
+        # Set defaults
+        model = kwargs.get("model", models[0])
+
+        # Create widgets
+        self.w_model = widgets.Dropdown(options=models, value=model, description="Model")
+        self.w_max_tokens = widgets.IntText(value=10000, min=1, description="Max tokens")
+        self.btn_extract = widgets.Button(description="Load token embeddings", button_style="primary")
+        self.btn_clear = widgets.Button(description="Clear token embeddings", button_style="danger")
+
+        children = [self.w_model, self.w_max_tokens, widgets.HBox([self.btn_extract, self.btn_clear])]
+        if out is None:
+            self.out = widgets.Output()
+            children.append(self.out)
+        else:
+            self.out = out
+        super().__init__(children=children)
+
+        # Register handlers
+        self.btn_extract.on_click(self._do_extract)
+        self.btn_clear.on_click(self._do_clear)
+
     @property
     def model_name(self) -> str:
         return self.w_model.value
 
     @property
-    def layers(self) -> list[int]:
-        return list(self.w_layers.value)
+    def max_tokens(self) -> int:
+        return self.w_max_tokens.value
 
-    @property
-    def k(self) -> int:
-        return self.w_k.value
+    def _update_value(self, token_embeddings: tuple[list[str], np.array] | None):
+        self.token_embeddings = token_embeddings
+        self.value = not self.value
+
+    @contextlib.contextmanager
+    def _update_buttons(self):
+        self.btn_extract.disabled = True
+        try:
+            yield
+        finally:
+            self.btn_extract.disabled = False
+
+    def _do_extract(self, *args):
+        with self._update_buttons(), self.out:
+            self.out.clear_output(wait=True)
+
+            model, tokenizer = load_model_and_tokenizer(self.model_name)
+            token_ids = select(range(tokenizer.vocab_size), at_most=self.max_tokens)
+            token_embeddings = get_token_embeddings(model, tokenizer, token_ids=token_ids)
+            self._update_value(token_embeddings)
+
+    def _do_clear(self, *args):
+        with self._update_buttons(), self.out:
+            self.out.clear_output(wait=True)
+
+            self._update_value(None)
+            print("Cleared token embeddings.")
 
 
 class ActivationsSelectorWidget(widgets.VBox, widgets.ValueWidget):
@@ -324,18 +389,30 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.ValueWidget):
         for w in self.children:
             w.observe(self._update_value, names="value")
 
-    def _update_value(self, *args):
-        self.value = not self.value
+    @property
+    def samples(self) -> list[str]:
+        return list(self.w_samples_safe.value) + list(self.w_samples_unsafe.value)
 
-    def _update_pool_method(self, *args):
-        if self.w_pool_method.value == "slice":
-            self.w_pool_slice.layout.display = None  # show the widget
-        else:
-            self.w_pool_slice.layout.display = "none"  # hide the widget
+    @property
+    def layers(self) -> list[int]:
+        return list(self.w_layers.value)
+
+    @property
+    def pool_method(self) -> PoolMethod:
         if self.w_pool_method.value == "indices":
-            self.w_pool_indices.layout.display = None  # show the widget
+            return list(map(int, self.w_pool_indices.value.split(",")))
+        elif self.w_pool_method.value == "slice":
+            return _str_to_slice(self.w_pool_slice.value)
         else:
-            self.w_pool_indices.layout.display = "none"  # hide the widget
+            return self.w_pool_method.value
+
+    @property
+    def exclude_bos(self) -> bool:
+        return self.w_exclude_bos.value
+
+    @property
+    def exclude_special_tokens(self) -> bool | list[str]:
+        return self.w_exclude_special_tokens.value
 
     def link(self, other: "ActivationsSelectorWidget"):
         for w1, w2 in zip(self.children, other.children):
@@ -369,95 +446,18 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.ValueWidget):
             ]
             self.w_layers.options = activations.layers
 
-    @property
-    def samples(self) -> list[str]:
-        return list(self.w_samples_safe.value) + list(self.w_samples_unsafe.value)
-
-    @property
-    def layers(self) -> list[int]:
-        return list(self.w_layers.value)
-
-    @property
-    def pool_method(self) -> PoolMethod:
-        if self.w_pool_method.value == "indices":
-            return list(map(int, self.w_pool_indices.value.split(",")))
-        elif self.w_pool_method.value == "slice":
-            return _str_to_slice(self.w_pool_slice.value)
-        else:
-            return self.w_pool_method.value
-
-    @property
-    def exclude_bos(self) -> bool:
-        return self.w_exclude_bos.value
-
-    @property
-    def exclude_special_tokens(self) -> bool | list[str]:
-        return self.w_exclude_special_tokens.value
-
-
-class TokenEmbeddingsLoaderWidget(widgets.VBox, widgets.ValueWidget):
-    value = Bool(False, help="Dummy trait to trigger observers on changes.")
-    token_embeddings: tuple[list[str], np.array] | None = None
-
-    def __init__(self, out: widgets.Output | None = None, **kwargs):
-        models = list(MODEL_REGISTRY.keys())
-
-        # Set defaults
-        model = kwargs.get("model", models[0])
-
-        # Create widgets
-        self.w_model = widgets.Dropdown(options=models, value=model, description="Model")
-        self.w_max_tokens = widgets.IntText(value=10000, min=1, description="Max tokens")
-        self.btn_extract = widgets.Button(description="Load token embeddings", button_style="primary")
-        self.btn_clear = widgets.Button(description="Clear token embeddings", button_style="danger")
-
-        children = [self.w_model, self.w_max_tokens, widgets.HBox([self.btn_extract, self.btn_clear])]
-        if out is None:
-            self.out = widgets.Output()
-            children.append(self.out)
-        else:
-            self.out = out
-        super().__init__(children=children)
-
-        # Register handlers
-        self.btn_extract.on_click(self._do_extract)
-        self.btn_clear.on_click(self._do_clear)
-
-    def _update_value(self, token_embeddings: tuple[list[str], np.array] | None):
-        self.token_embeddings = token_embeddings
+    def _update_value(self, *args):
         self.value = not self.value
 
-    @contextlib.contextmanager
-    def _update_buttons(self):
-        self.btn_extract.disabled = True
-        try:
-            yield
-        finally:
-            self.btn_extract.disabled = False
-
-    def _do_extract(self, *args):
-        with self._update_buttons(), self.out:
-            self.out.clear_output(wait=True)
-
-            model, tokenizer = load_model_and_tokenizer(self.model_name)
-            token_ids = select(range(tokenizer.vocab_size), at_most=self.max_tokens)
-            token_embeddings = get_token_embeddings(model, tokenizer, token_ids=token_ids)
-            self._update_value(token_embeddings)
-
-    def _do_clear(self, *args):
-        with self._update_buttons(), self.out:
-            self.out.clear_output(wait=True)
-
-            self._update_value(None)
-            print("Cleared token embeddings.")
-
-    @property
-    def model_name(self) -> str:
-        return self.w_model.value
-
-    @property
-    def max_tokens(self) -> int:
-        return self.w_max_tokens.value
+    def _update_pool_method(self, *args):
+        if self.w_pool_method.value == "slice":
+            self.w_pool_slice.layout.display = None  # show the widget
+        else:
+            self.w_pool_slice.layout.display = "none"  # hide the widget
+        if self.w_pool_method.value == "indices":
+            self.w_pool_indices.layout.display = None  # show the widget
+        else:
+            self.w_pool_indices.layout.display = "none"  # hide the widget
 
 
 class ReadersSelectorWidget(widgets.VBox, widgets.ValueWidget):
@@ -484,12 +484,12 @@ class ReadersSelectorWidget(widgets.VBox, widgets.ValueWidget):
         self.w_x.observe(self._update_value, names="value")
         self.w_y.observe(self._update_value, names="value")
 
-    def _update_value(self, *args):
-        self.value = not self.value
-
     @property
     def readers(self) -> list[str]:
         return [self.w_x.value, self.w_y.value]
+
+    def _update_value(self, *args):
+        self.value = not self.value
 
 
 class AdvancedOptionsWidget(widgets.VBox, widgets.ValueWidget):
