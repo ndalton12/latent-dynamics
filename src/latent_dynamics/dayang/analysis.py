@@ -246,7 +246,7 @@ class ActivationReaders(BaseEstimator, TransformerMixin):
             idx += r.num_components
         return labels
 
-    def fit(self, X: np.ndarray, y: np.ndarray | None = None) -> ActivationReaders:
+    def fit(self, X: np.ndarray, y: np.ndarray | None = None, pbar: bool = False) -> ActivationReaders:
         X_residual = X.copy()
         total_variance = np.var(X, axis=0).sum()
 
@@ -254,7 +254,7 @@ class ActivationReaders(BaseEstimator, TransformerMixin):
         intercepts = []
         explained_variance = []
 
-        for reader in self.readers:
+        for reader in tqdm(self.readers, disable=not pbar, leave=False, desc="Fitting readers"):
             w_batch, b_batch = reader(X_residual, y)  # shape: (num_components, num_features)
 
             for i in range(w_batch.shape[0]):
@@ -328,15 +328,16 @@ def analyze_per_layer(
         return models
     else:
         # Train a single reader on all layers
-        X = np.concatenate(
-            [sample["activations"].reshape(-1, sample["activations"].shape[-1]) for sample in samples],
-            axis=0,
-        )
-        y = np.concatenate(
-            [np.full(np.prod(sample["activations"].shape[:-1]), int(sample["is_safe"])) for sample in samples],
-            axis=0,
-        )
-        model = ActivationReaders(readers=readers).fit(X, y)
+        for _ in tqdm(range(1), desc="Analyzing all layers"):
+            X = np.concatenate(
+                [sample["activations"].reshape(-1, sample["activations"].shape[-1]) for sample in samples],
+                axis=0,
+            )
+            y = np.concatenate(
+                [np.full(np.prod(sample["activations"].shape[:-1]), int(sample["is_safe"])) for sample in samples],
+                axis=0,
+            )
+            model = ActivationReaders(readers=readers).fit(X, y, pbar=True)
         return defaultdict(lambda: model)
 
 
@@ -381,13 +382,14 @@ def analyze_per_token(
         return models
     else:
         # Train a single reader on all token positions
-        X = np.concatenate(
-            [sample["activations"].reshape(-1, sample["activations"].shape[-1]) for sample in samples],
-            axis=0,
-        )
-        y = np.concatenate(
-            [np.full(np.prod(sample["activations"].shape[:-1]), int(sample["is_safe"])) for sample in samples],
-            axis=0,
-        )
-        model = ActivationReaders(readers=readers).fit(X, y)
+        for _ in tqdm(range(1), desc="Analyzing all tokens"):
+            X = np.concatenate(
+                [sample["activations"].reshape(-1, sample["activations"].shape[-1]) for sample in samples],
+                axis=0,
+            )
+            y = np.concatenate(
+                [np.full(np.prod(sample["activations"].shape[:-1]), int(sample["is_safe"])) for sample in samples],
+                axis=0,
+            )
+            model = ActivationReaders(readers=readers).fit(X, y, pbar=True)
         return defaultdict(lambda: model)

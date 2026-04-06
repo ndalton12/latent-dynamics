@@ -231,7 +231,7 @@ class Activations:
             layers = [layers]
 
         results = []
-        for sample_id in sample_ids:
+        for sample_id in tqdm(sample_ids, desc="Getting activations", disable=len(sample_ids) < 100, leave=False):
             sample = self.samples.loc[sample_id].copy()
             tokens = sample["tokens"]
 
