@@ -275,10 +275,14 @@ class Activations:
             )
         return results
 
-    def select(self, sample_ids: list[str] | None = None, layers: list[int] | None = None) -> "Activations":
+    def select(self, sample_ids: list[str] | str | None = None, layers: list[int] | int | None = None) -> "Activations":
         """Return a new Activations object containing only the specified samples and/or layers."""
         if sample_ids is None and layers is None:
             return self
+        if isinstance(sample_ids, str):
+            sample_ids = [sample_ids]
+        if isinstance(layers, int):
+            layers = [layers]
 
         samples = self.samples
         activations = self.activations
