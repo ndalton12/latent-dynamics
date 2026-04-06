@@ -29,10 +29,41 @@ SPECIAL_TOKENS = {
     "<|im_end|>",
     # Llama3.1
     "<|begin_of_text|>",
-    "<|eot_id|>",
     "<|start_header_id|>",
     "<|end_header_id|>",
+    "<|eot_id|>",
 }
+
+
+def _get_chattemplate_token_mask(tokens: list[str]) -> list[bool]:
+    """Return a hard-coded boolean mask for tokens of the chat template except for newlines preceeding responses."""
+    mask = np.full(len(tokens), False)
+    for i in range(len(tokens) - 1):
+        # Gemma3
+        if tokens[i] == "<start_of_turn>":
+            mask[i] = True
+            mask[i + 1] = tokens[i + 1] in ["system", "user", "model"]
+            mask[i + 2] = tokens[i + 2] == "\n" and tokens[i + 1] != "model"
+        elif tokens[i] == "<end_of_turn>":
+            mask[i] = True
+            mask[i + 1] = tokens[i + 1] == "\n"
+        # Qwen3
+        elif tokens[i] == "<|im_start|>":
+            mask[i] = True
+            mask[i + 1] = tokens[i + 1] in ["system", "user", "assistant"]
+            mask[i + 2] = tokens[i + 2] == "Ċ" and tokens[i + 1] != "assistant"
+        elif tokens[i] == "<|im_end|>":
+            mask[i] = True
+            mask[i + 1] = tokens[i + 1] == "Ċ"
+        # Llama3.1
+        elif tokens[i] == "<|start_header_id|>":
+            mask[i] = True
+            mask[i + 1] = tokens[i + 1] in ["system", "user", "assistant"]
+            mask[i + 2] = tokens[i + 2] == "<|end_header_id|>"
+            mask[i + 3] = tokens[i + 3] == "ĊĊ" and tokens[i + 1] != "assistant"
+        elif tokens[i] == "<|eot_id|>":
+            mask[i] = True
+    return mask
 
 
 def _pool(
@@ -55,8 +86,11 @@ def _pool(
         token_positions = token_positions[1:]
         arrays = [array[1:] for array in arrays]
     if exclude_special_tokens:
+        # Exclude special tokens
         exclude_special_tokens = SPECIAL_TOKENS if exclude_special_tokens is True else exclude_special_tokens
-        mask = [t not in exclude_special_tokens for t in tokens]
+        mask = np.array([t not in exclude_special_tokens for t in tokens])
+        # Exclude chat template tokens
+        mask &= ~_get_chattemplate_token_mask(tokens)
 
         activations = activations[mask]
         tokens = tokens[mask]
