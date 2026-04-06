@@ -24,28 +24,54 @@ from latent_dynamics.dayang.utils import (
 from latent_dynamics.dayang.analysis import ActivationReaders
 
 
-def plot_explained_variance(readers: dict[int, ActivationReaders]):
-    """Plot percentage of explained variance."""
+def plot_reader_statistics(readers: dict[int, ActivationReaders]):
+    """Plot explained variance and accuracy of readers."""
     if isinstance(readers, defaultdict):
         positions = ["all"]
     else:
         positions = list(readers.keys())
     explained_variance = np.stack([readers[i].explained_variance_ratio_ for i in positions], axis=1)
+    accuracy = np.stack([readers[i].accuracy_ for i in positions], axis=1)
     labels = readers[positions[0]].labels
 
-    plt.figure(figsize=(6, 4))
+    fig, axes = plt.subplots(ncols=2, figsize=(12, 4), layout="constrained")
+
+    # Plot explained variance
+    ax = axes[0]
     if explained_variance.shape[1] > 1:
-        plt.stackplot(positions, explained_variance, labels=labels)
+        ax.stackplot(positions, explained_variance, labels=labels)
     else:
         bottom = np.zeros_like(explained_variance[0])
         for y, label in zip(explained_variance, labels):
-            plt.bar(positions, y, bottom=bottom, label=label)
+            ax.bar(positions, y, bottom=bottom, label=label)
             bottom += y
-    plt.ylim(0, 1)
-    plt.title("Percentage of explained variance")
-    plt.xlabel("Position")
-    plt.ylabel("Percentage of explained variance")
-    plt.legend()
+        ax.set_xlim(-2.5, 2.5)
+    ax.set_ylim(0, 1)
+    ax.set_title("Explained variance by reader")
+    ax.set_xlabel("Position")
+    ax.set_ylabel("Percentage of explained variance")
+    ax.legend()
+
+    # Plot accuracy
+    ax = axes[1]
+    if accuracy.shape[1] > 1:
+        for y, label in zip(accuracy, labels):
+            ax.plot(positions, y, label=label)
+    else:
+        cmap = plt.get_cmap("tab10")
+        colors = [cmap(i % len(cmap.colors)) for i in range(accuracy.shape[0])]
+        ax.bar(labels, accuracy.squeeze(), color=colors)
+        if len(labels) <= 5:
+            center = (len(labels) - 1) / 2
+            ax.set_xlim(center - 5 / 2, center + 5 / 2)
+
+    ax.axhline(0.5, color="gray", linestyle="--", label="Random guessing")
+    ax.set_ylim(0, 1)
+    ax.set_title("Accuracy of reader")
+    ax.set_xlabel("Position")
+    ax.set_ylabel("Accuracy")
+    ax.legend()
+
     plt.show()
 
 

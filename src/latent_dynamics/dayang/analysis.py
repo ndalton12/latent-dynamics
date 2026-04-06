@@ -236,6 +236,8 @@ class ActivationReaders(BaseEstimator, TransformerMixin):
         self.components_: np.ndarray | None = None
         self.intercepts_: np.ndarray | None = None
         self.explained_variance_: np.ndarray | None = None
+        self.explained_variance_ratio_: np.ndarray | None = None
+        self.accuracy_: np.ndarray | None = None
 
     @property
     def labels(self) -> list[str]:
@@ -253,6 +255,7 @@ class ActivationReaders(BaseEstimator, TransformerMixin):
         components = []
         intercepts = []
         explained_variance = []
+        accuracy = []
 
         for reader in tqdm(self.readers, disable=not pbar, leave=False, desc="Fitting readers"):
             w_batch, b_batch = reader(X_residual, y)  # shape: (num_components, num_features)
@@ -267,15 +270,23 @@ class ActivationReaders(BaseEstimator, TransformerMixin):
                 # Compute explained variance
                 var = np.var(proj)
                 explained_variance.append(var)
+                # Compute accuracy if labels are available
+                if y is not None:
+                    y_pred = (proj > 0).astype(int)
+                    acc = (y_pred == y).mean()
+                else:
+                    acc = np.nan
+                accuracy.append(acc)
                 # Remove orthogonal projection from the residual
                 w_norm = _normalize(w)
                 X_residual = X_residual - np.outer(X_residual @ w_norm, w_norm)
 
         self.components_ = np.array(components)
         self.intercepts_ = np.array(intercepts)
+        self.explained_variance_ = np.array(explained_variance)
         with np.errstate(divide="ignore", invalid="ignore"):
             self.explained_variance_ratio_ = np.array(explained_variance) / total_variance
-            self.explained_variance_ = np.array(explained_variance)
+        self.accuracy_ = np.array(accuracy)
 
         return self
 
