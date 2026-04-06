@@ -88,11 +88,11 @@ def load_model_and_tokenizer(
 
     print(
         f"Loaded model: {model_spec.path}"
-        f"\n  Number of hidden states:         {model.config.num_hidden_layers} + 2"
-        f"\n  Size of hidden state:            {model.config.hidden_size}"
-        f"\n  Size of activations (per token): {(model.config.num_hidden_layers + 2) * model.config.hidden_size * 4 // 1024} KB"
-        f"\n  Model dtype:                     {model.dtype}"
-        f"\n  Device:                          {model.device}"
+        f"\n  Number of layers:     {model.config.num_hidden_layers} + 2"
+        f"\n  Shape of activations: {model.config.hidden_size}"
+        f"\n  Size of activations:  {(model.config.num_hidden_layers + 2) * model.config.hidden_size * 4 // 1024} KB per token"
+        f"\n  Model dtype:          {model.dtype}"
+        f"\n  Device:               {model.device}"
     )
     return model, tokenizer
 
