@@ -115,8 +115,8 @@ def plot_per_layer(
             rows=nrows,
             cols=ncols,
             subplot_titles=[f"Layer {layer}" for layer in activations.layers],
-            horizontal_spacing=0.16 / ncols,
-            vertical_spacing=0.24 / nrows,
+            horizontal_spacing=0.2 / ncols,
+            vertical_spacing=0.2 / nrows,
             shared_xaxes="all" if share_axes else False,
             shared_yaxes="all" if share_axes else False,
         )
@@ -215,8 +215,8 @@ def plot_per_layer(
     fig.update_xaxes(title_text=labels[0], row=nrows if separate else None)
     fig.update_yaxes(title_text=labels[1], col=1 if separate else None)
     fig.update_layout(
-        width=300 * ncols if separate else 1000,
-        height=300 * nrows if separate else 800,
+        width=300 * ncols + 150 if separate else 1000,
+        height=300 * nrows + 100 if separate else 800,
         title_text="Analysis per layer",
         legend=dict(groupclick="togglegroup" if separate else "toggleitem"),
         showlegend=show_legend,
@@ -275,8 +275,8 @@ def plot_per_token(
             rows=nrows,
             cols=ncols,
             subplot_titles=subplot_titles,
-            horizontal_spacing=0.16 / ncols,
-            vertical_spacing=0.24 / nrows,
+            horizontal_spacing=0.2 / ncols,
+            vertical_spacing=0.2 / nrows,
             shared_xaxes="all" if share_axes else False,
             shared_yaxes="all" if share_axes else False,
         )
@@ -365,8 +365,8 @@ def plot_per_token(
     fig.update_xaxes(title_text=labels[0], row=nrows if separate else None)
     fig.update_yaxes(title_text=labels[1], col=1 if separate else None)
     fig.update_layout(
-        width=300 * ncols if separate else 1000,
-        height=300 * nrows if separate else 800,
+        width=300 * ncols + 150 if separate else 1000,
+        height=300 * nrows + 100 if separate else 800,
         title="Analysis per token",
         legend=dict(groupclick="togglegroup" if separate else "toggleitem"),
         showlegend=show_legend,
