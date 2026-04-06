@@ -415,14 +415,14 @@ class ActivationsSelectorWidget(widgets.VBox, widgets.ValueWidget):
         return self.w_exclude_special_tokens.value
 
     def link(self, other: "ActivationsSelectorWidget"):
-        for w1, w2 in zip(self.children, other.children):
-            if isinstance(w1, (widgets.SelectMultiple | widgets.Dropdown)):
+        for w_self, w_other in zip(self.children, other.children):
+            if isinstance(w_self, (widgets.SelectMultiple | widgets.Dropdown)):
                 key = "index"
             else:
                 key = "value"
-            link = widgets.jslink((w1, key), (w2, key))
-            w1.disabled = True
-            self._links.append((w1, link))
+            link = widgets.jslink((w_other, key), (w_self, key))
+            w_self.disabled = True
+            self._links.append((w_self, link))
 
     def unlink(self):
         for w, link in self._links:
