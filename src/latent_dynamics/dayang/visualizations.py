@@ -55,11 +55,13 @@ def plot_per_layer(
     pool_method: PoolMethod = "last",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
-    token_embeddings: tuple[list[str], np.array] | None = None,
-    token_embeddings_resolution: int = 50,
     separate: bool = True,
     ncols: int = 5,
     share_axes: bool = True,
+    color_by: Literal["auto", "layer", "sample", "is_safe"] = "auto",
+    show_legend: Literal["auto"] | bool = "auto",
+    token_embeddings: tuple[list[str], np.array] | None = None,
+    token_embeddings_resolution: int = 50,
 ) -> None:
     """Visualize projections per layer."""
     samples = activations.get(
@@ -67,6 +69,16 @@ def plot_per_layer(
         exclude_bos=exclude_bos,
         exclude_special_tokens=exclude_special_tokens,
     )
+
+    if color_by == "auto":
+        if len(samples) == 1 and not separate:
+            color_by = "layer"
+        elif len(samples) <= 5:
+            color_by = "sample"
+        else:
+            color_by = "is_safe"
+    if show_legend == "auto":
+        show_legend = len(samples) <= 5
 
     # Create figure
     num_layers = activations.num_layers
@@ -85,6 +97,7 @@ def plot_per_layer(
         fig = go.Figure()
 
     # Plot per layer
+    colors = fig.layout.template.layout.colorway
     for layer_idx, layer in zip(tqdm(range(num_layers), desc="Plotting per layer"), activations.layers):
         row = (layer_idx // ncols) + 1
         col = (layer_idx % ncols) + 1
@@ -110,26 +123,44 @@ def plot_per_layer(
                 col=col if separate else None,
             )
 
-        for sample in samples:
+        for sample_idx, sample in enumerate(samples):
+            if color_by == "layer":
+                color = colors[layer_idx % len(colors)]
+            elif color_by == "sample":
+                color = colors[sample_idx % len(colors)]
+            elif color_by == "is_safe":
+                color = "green" if sample["is_safe"] else "red"
+            else:
+                raise ValueError(f"Invalid colorby value: {color_by}")
+
             # Project activations
             acts = sample["activations"][:, layer_idx]
             acts_proj = readers[layer].transform(acts)
 
             # Plot activations
-            color = "green" if sample["is_safe"] else "red"
-            symbol = "x" if sample["is_adversarial"] else "circle"
-            alpha = 0.5 if sample["is_adversarial"] else 0.25
+            if separate:
+                trace_legendgroup = sample["id"] if len(samples) > 1 else None
+                trace_legendgrouptitle = None
+                trace_name = sample["id"]
+                trace_showlegend = layer_idx == 0
+            else:
+                trace_legendgroup = sample["id"] if len(samples) > 1 else None
+                trace_legendgrouptitle = sample["id"] if len(samples) > 1 else None
+                trace_name = layer_idx
+                trace_showlegend = True
             fig.add_trace(
                 go.Scatter(
                     x=acts_proj[:, 0],
                     y=acts_proj[:, 1],
                     mode="lines+markers",
-                    marker=dict(color=color, size=4, symbol=symbol),
+                    marker=dict(color=color, size=4, symbol="x" if sample["is_adversarial"] else "circle"),
                     line=dict(color=color, width=1),
-                    opacity=alpha,
                     hovertemplate="(%{x:.2f}, %{y:.2f})<br>%{hovertext}",
                     hovertext=get_tooltips_per_layer(sample, layer_idx, html=True),
-                    showlegend=False,
+                    legendgroup=trace_legendgroup,
+                    legendgrouptitle_text=trace_legendgrouptitle,
+                    name=trace_name,
+                    showlegend=trace_showlegend,
                 ),
                 row=row if separate else None,
                 col=col if separate else None,
@@ -143,8 +174,10 @@ def plot_per_layer(
                         y=[acts_proj[0, 1], acts_proj[-1, 1]],
                         mode="markers",
                         marker=dict(color=color, size=6, symbol=["circle", "triangle-up"]),
-                        opacity=0.5,
                         hoverinfo="skip",
+                        legendgroup=trace_legendgroup,
+                        legendgrouptitle_text=trace_legendgrouptitle,
+                        name=trace_name,
                         showlegend=False,
                     ),
                     row=row if separate else None,
@@ -159,8 +192,7 @@ def plot_per_layer(
         height=300 * nrows if separate else 800,
         title_text="Analysis per layer",
         legend=dict(groupclick="togglegroup" if separate else "toggleitem"),
-        showlegend=False,
-        # showlegend=showlegend,
+        showlegend=show_legend,
     )
     fig.show()
 
@@ -171,13 +203,13 @@ def plot_per_token(
     pool_method: PoolMethod = "all",
     exclude_bos: bool = True,
     exclude_special_tokens: bool | list[str] = True,
-    token_embeddings: tuple[list[str], np.array] | None = None,
-    token_embeddings_resolution: int = 50,
     separate: bool = False,
     ncols: int = 5,
     share_axes: bool = True,
-    colorby: Literal["auto", "token", "sample", "is_safe"] | None = "auto",
-    showlegend: Literal["auto"] | bool = "auto",
+    color_by: Literal["auto", "token", "sample", "is_safe"] = "auto",
+    show_legend: Literal["auto"] | bool = "auto",
+    token_embeddings: tuple[list[str], np.array] | None = None,
+    token_embeddings_resolution: int = 50,
 ):
     """Visualize projections per token."""
     samples = activations.get(
@@ -186,15 +218,15 @@ def plot_per_token(
         exclude_special_tokens=exclude_special_tokens,
     )
 
-    if colorby == "auto":
+    if color_by == "auto":
         if len(samples) == 1 and not separate:
-            colorby = "token"
+            color_by = "token"
         elif len(samples) <= 5:
-            colorby = "sample"
+            color_by = "sample"
         else:
-            colorby = "is_safe"
-    if showlegend == "auto":
-        showlegend = len(samples) <= 5
+            color_by = "is_safe"
+    if show_legend == "auto":
+        show_legend = len(samples) <= 5
 
     # Create figure
     num_tokens = samples[0]["activations"].shape[0]
@@ -233,14 +265,14 @@ def plot_per_token(
         col = (token_idx % ncols) + 1
 
         for sample_idx, sample in enumerate(samples):
-            if colorby == "token":
-                color = None
-            elif colorby == "sample":
+            if color_by == "token":
+                color = colors[token_idx % len(colors)]
+            elif color_by == "sample":
                 color = colors[sample_idx % len(colors)]
-            elif colorby == "is_safe":
+            elif color_by == "is_safe":
                 color = "green" if sample["is_safe"] else "red"
             else:
-                raise ValueError(f"Invalid colorby value: {colorby}")
+                raise ValueError(f"Invalid colorby value: {color_by}")
 
             if token_embeddings is not None and sample_idx == 0 and (token_idx == 0 or separate):
                 # Project token embeddings
@@ -286,7 +318,7 @@ def plot_per_token(
                     x=acts_proj[:, 0],
                     y=acts_proj[:, 1],
                     mode="lines+markers+text",
-                    marker=dict(color=color, size=4),
+                    marker=dict(color=color, size=4, symbol="x" if sample["is_adversarial"] else "circle"),
                     line=dict(color=color, width=1),
                     text=trace_text,
                     textposition="top center",
@@ -310,7 +342,7 @@ def plot_per_token(
         height=300 * nrows if separate else 800,
         title="Analysis per token",
         legend=dict(groupclick="togglegroup" if separate else "toggleitem"),
-        showlegend=showlegend,
+        showlegend=show_legend,
     )
     fig.show()
 
