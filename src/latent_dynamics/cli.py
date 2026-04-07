@@ -862,10 +862,10 @@ def plot_active_learning_figures_cmd(
     ],
     output_dir: Annotated[
         Path,
-        typer.Option(help="Directory where Figure 1/2/3 files will be written."),
+        typer.Option(help="Directory where Figure 1/2/3/4 files will be written."),
     ] = Path("results/figures"),
 ) -> None:
-    """Generate three high-quality figures from active-learning comparison results."""
+    """Generate comparison figures from active-learning comparison results."""
     from latent_dynamics.learning_experiment import generate_comparison_figures
 
     if not comparison_json.exists():

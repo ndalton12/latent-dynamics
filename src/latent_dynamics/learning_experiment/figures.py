@@ -15,12 +15,12 @@ def _configure_style() -> None:
         {
             "figure.dpi": 150,
             "savefig.dpi": 300,
-            "font.size": 11,
-            "axes.titlesize": 13,
-            "axes.labelsize": 11,
-            "legend.fontsize": 10,
-            "xtick.labelsize": 10,
-            "ytick.labelsize": 10,
+            "font.size": 15,
+            "axes.titlesize": 17,
+            "axes.labelsize": 15,
+            "legend.fontsize": 14,
+            "xtick.labelsize": 13,
+            "ytick.labelsize": 13,
             "axes.linewidth": 1.1,
             "lines.linewidth": 2.3,
             "lines.markersize": 5.5,
@@ -280,31 +280,179 @@ def _select_methods(payload: dict[str, Any]) -> list[str]:
     return available[:3]
 
 
+def _method_colors() -> dict[str, str]:
+    return {
+        "random": "#4C78A8",
+        "static_disagreement": "#F58518",
+        "dynamic_disagreement": "#54A24B",
+        "dynamic_uncertainty": "#4C78A8",
+        "dynamic_uncertainty_diversity": "#B279A2",
+    }
+
+
+def _select_heatmap_method(payload: dict[str, Any], methods: list[str]) -> str:
+    acquisitions = payload.get("acquisitions", [])
+    if "dynamic_disagreement" in acquisitions:
+        return "dynamic_disagreement"
+    if methods:
+        return methods[-1]
+    raise ValueError("No methods available for the layer-pair heatmap.")
+
+
+def _curve_style(
+    method_idx: int,
+    method_count: int,
+    n_points: int,
+) -> dict[str, Any]:
+    linestyles = ("-", "--", "-.", ":")
+    markers = ("o", "s", "^", "D", "P", "X", "v", "<", ">")
+    linestyle = linestyles[method_idx % len(linestyles)]
+    marker = markers[method_idx % len(markers)]
+
+    if n_points <= 0:
+        marker_positions: list[int] | None = None
+    else:
+        step = max(1, int(method_count))
+        start = method_idx % step
+        marker_idx = np.arange(start, n_points, step, dtype=np.int64)
+        if marker_idx.size == 0:
+            marker_idx = np.asarray([min(method_idx, n_points - 1)], dtype=np.int64)
+        marker_positions = marker_idx.tolist()
+
+    return {
+        "linestyle": linestyle,
+        "marker": marker,
+        "markevery": marker_positions,
+    }
+
+
+def _plot_metric_curve(
+    ax: Any,
+    x: np.ndarray,
+    y: np.ndarray,
+    err: np.ndarray | None,
+    label: str,
+    color: str | None,
+    method_idx: int,
+    method_count: int,
+) -> None:
+    style = _curve_style(
+        method_idx=method_idx,
+        method_count=method_count,
+        n_points=int(x.size),
+    )
+    ax.plot(
+        x,
+        y,
+        label=label,
+        color=color,
+        linestyle=style["linestyle"],
+        marker=style["marker"],
+        markevery=style["markevery"],
+        markerfacecolor="white",
+        markeredgewidth=1.15,
+    )
+    if err is not None and err.size == y.size:
+        ax.fill_between(x, y - err, y + err, alpha=0.2, color=color)
+
+
+def _set_compact_y_limits(
+    ax: Any,
+    y_series: list[np.ndarray],
+    err_series: list[np.ndarray | None],
+    bounds: tuple[float, float] | None = None,
+    pad_ratio: float = 0.08,
+) -> None:
+    lows: list[float] = []
+    highs: list[float] = []
+    for y, err in zip(y_series, err_series, strict=False):
+        if y.size == 0:
+            continue
+        if err is not None and err.size == y.size:
+            lo = y - err
+            hi = y + err
+        else:
+            lo = y
+            hi = y
+        lo = lo[np.isfinite(lo)]
+        hi = hi[np.isfinite(hi)]
+        if lo.size == 0 or hi.size == 0:
+            continue
+        lows.append(float(np.min(lo)))
+        highs.append(float(np.max(hi)))
+
+    if not lows or not highs:
+        return
+
+    low = float(min(lows))
+    high = float(max(highs))
+    span = max(high - low, 1e-6)
+
+    if bounds is not None:
+        bounded_span = max(bounds[1] - bounds[0], 1e-6)
+        min_span = 0.18 * bounded_span
+    else:
+        min_span = 0.12 * max(abs(low), abs(high), 1.0)
+
+    if span < min_span:
+        center = 0.5 * (low + high)
+        half = 0.5 * min_span
+        low = center - half
+        high = center + half
+        span = min_span
+
+    pad = pad_ratio * span
+    low -= pad
+    high += pad
+
+    if bounds is not None:
+        low = max(bounds[0], low)
+        high = min(bounds[1], high)
+        if high - low < 1e-6:
+            center = np.clip(0.5 * (low + high), bounds[0], bounds[1])
+            half = min_span * 0.5
+            low = max(bounds[0], center - half)
+            high = min(bounds[1], center + half)
+
+    ax.set_ylim(low, high)
+
+
 def plot_figure1_al_curves(payload: dict[str, Any], output_dir: Path) -> dict[str, str]:
     methods = _select_methods(payload)
     if not methods:
         raise ValueError("No acquisition methods available to plot Figure 1.")
 
-    colors = {
-        "random": "#4C78A8",
-        "static_disagreement": "#F58518",
-        "dynamic_disagreement": "#54A24B",
-    }
+    colors = _method_colors()
 
     fig, ax = plt.subplots(figsize=(9.2, 5.8))
-    for method in methods:
+    y_series: list[np.ndarray] = []
+    err_series: list[np.ndarray | None] = []
+    for method_idx, method in enumerate(methods):
         x, y, err = _extract_curve(payload=payload, method=method, metric="test_auroc")
         if x.size == 0:
             continue
+        y_series.append(y)
+        err_series.append(err)
         color = colors.get(method, None)
-        ax.plot(x, y, marker="o", label=method.replace("_", " "), color=color)
-        if err is not None and err.size == y.size:
-            ax.fill_between(x, y - err, y + err, alpha=0.22, color=color)
+        _plot_metric_curve(
+            ax=ax,
+            x=x,
+            y=y,
+            err=err,
+            label=method.replace("_", " "),
+            color=color,
+            method_idx=method_idx,
+            method_count=len(methods),
+        )
 
     ax.set_xlabel("Queried Labels")
     ax.set_ylabel("Test AUROC")
-    ax.set_title("Figure 1: Active Learning Curves")
-    ax.set_ylim(0.0, 1.0)
+    _set_compact_y_limits(
+        ax=ax,
+        y_series=y_series,
+        err_series=err_series,
+        bounds=(0.0, 1.0),
+    )
     ax.legend(frameon=True, loc="best")
     fig.tight_layout()
     return _save_figure(fig, output_dir / "figure1_al_curves")
@@ -325,15 +473,13 @@ def plot_figure2_ranking_stability(
     fig, axes = plt.subplots(1, 3, figsize=(14.2, 4.8), sharex=True)
     axes_flat = np.asarray(axes).flatten()
 
-    colors = {
-        "dynamic_uncertainty": "#4C78A8",
-        "dynamic_disagreement": "#54A24B",
-        "dynamic_uncertainty_diversity": "#B279A2",
-    }
+    colors = _method_colors()
 
-    for ax, (metric_key, title, y_lim) in zip(axes_flat, metric_specs, strict=False):
+    for ax, (metric_key, _title, y_lim) in zip(axes_flat, metric_specs, strict=False):
         plotted_any = False
-        for method in dynamic_methods:
+        y_series: list[np.ndarray] = []
+        err_series: list[np.ndarray | None] = []
+        for method_idx, method in enumerate(dynamic_methods):
             x, y, err = _extract_stability_curve(
                 payload=payload,
                 method=method,
@@ -342,19 +488,30 @@ def plot_figure2_ranking_stability(
             if x.size == 0:
                 continue
             plotted_any = True
+            y_series.append(y)
+            err_series.append(err)
             color = colors.get(method, None)
-            ax.plot(x, y, marker="o", label=method.replace("_", " "), color=color)
-            if err is not None and err.size == y.size:
-                ax.fill_between(x, y - err, y + err, alpha=0.22, color=color)
+            _plot_metric_curve(
+                ax=ax,
+                x=x,
+                y=y,
+                err=err,
+                label=method.replace("_", " "),
+                color=color,
+                method_idx=method_idx,
+                method_count=len(dynamic_methods),
+            )
 
-        ax.set_title(title)
         ax.set_xlabel("Queried Labels")
-        if y_lim is not None:
-            ax.set_ylim(y_lim)
+        _set_compact_y_limits(
+            ax=ax,
+            y_series=y_series,
+            err_series=err_series,
+            bounds=y_lim,
+        )
         if plotted_any:
             ax.legend(frameon=True, loc="best")
 
-    fig.suptitle("Figure 2: Ranking Stability Across Rounds", y=1.01, fontsize=15)
     fig.tight_layout()
     return _save_figure(fig, output_dir / "figure2_ranking_stability")
 
@@ -364,64 +521,50 @@ def plot_figure3_layerwise(payload: dict[str, Any], output_dir: Path) -> dict[st
     if not methods:
         raise ValueError("No methods available for Figure 3.")
 
-    fig, (ax1, ax2) = plt.subplots(
-        1, 2, figsize=(14.5, 5.8), gridspec_kw={"width_ratios": [1.25, 1.0]}
-    )
-    colors = {
-        "random": "#4C78A8",
-        "static_disagreement": "#F58518",
-        "dynamic_disagreement": "#54A24B",
-    }
+    fig, ax = plt.subplots(figsize=(8.2, 5.8))
+    colors = _method_colors()
 
     layer_metrics_error: str | None = None
     try:
-        for method in methods:
+        layerwise_y_series: list[np.ndarray] = []
+        layerwise_err_series: list[np.ndarray | None] = []
+        for method_idx, method in enumerate(methods):
             layers, y, err = _get_layer_auroc_series(payload=payload, method=method)
             if layers.size == 0:
                 continue
+            layerwise_y_series.append(y)
+            layerwise_err_series.append(err)
             color = colors.get(method, None)
-            ax1.plot(layers, y, marker="o", label=method.replace("_", " "), color=color)
-            if err is not None and err.size == y.size:
-                ax1.fill_between(layers, y - err, y + err, alpha=0.22, color=color)
+            _plot_metric_curve(
+                ax=ax,
+                x=layers,
+                y=y,
+                err=err,
+                label=method.replace("_", " "),
+                color=color,
+                method_idx=method_idx,
+                method_count=len(methods),
+            )
 
-        ax1.set_xlabel("Layer")
-        ax1.set_ylabel("Test AUROC")
-        ax1.set_title("AUROC by Layer")
-        ax1.set_ylim(0.0, 1.0)
-        ax1.legend(frameon=True, loc="best")
-
-        heatmap_method = (
-            "dynamic_disagreement"
-            if "dynamic_disagreement" in payload.get("acquisitions", [])
-            else methods[-1]
+        ax.set_xlabel("Layer")
+        ax.set_ylabel("Test AUROC")
+        _set_compact_y_limits(
+            ax=ax,
+            y_series=layerwise_y_series,
+            err_series=layerwise_err_series,
+            bounds=(0.0, 1.0),
         )
-        mat, layers = _get_pairwise_disagreement_matrix(payload=payload, method=heatmap_method)
-        if mat.size == 0:
-            ax2.text(0.5, 0.5, "No layer-pair metrics available", ha="center", va="center")
-            ax2.set_axis_off()
-        else:
-            im = ax2.imshow(mat, cmap="magma", vmin=0.0, vmax=1.0)
-            ax2.set_title(f"Disagreement by Layer Pair ({heatmap_method.replace('_', ' ')})")
-            tick_positions = np.arange(len(layers))
-            ax2.set_xticks(tick_positions)
-            ax2.set_yticks(tick_positions)
-            ax2.set_xticklabels(layers, rotation=45, ha="right")
-            ax2.set_yticklabels(layers)
-            ax2.set_xlabel("Layer")
-            ax2.set_ylabel("Layer")
-            cbar = fig.colorbar(im, ax=ax2, fraction=0.046, pad=0.04)
-            cbar.set_label("Prediction Disagreement Rate")
+        ax.legend(frameon=True, loc="best")
     except ValueError as exc:
         layer_metrics_error = str(exc)
-        ax1.set_axis_off()
-        ax2.set_axis_off()
+        ax.set_axis_off()
         fig.text(
             0.5,
             0.52,
             "Layerwise metrics unavailable in this result file.",
             ha="center",
             va="center",
-            fontsize=13,
+            fontsize=14,
             fontweight="bold",
         )
         fig.text(
@@ -430,12 +573,71 @@ def plot_figure3_layerwise(payload: dict[str, Any], output_dir: Path) -> dict[st
             layer_metrics_error,
             ha="center",
             va="center",
-            fontsize=10,
+            fontsize=11,
         )
 
-    fig.suptitle("Figure 3: Layerwise Diagnostics", y=1.02, fontsize=15)
     fig.tight_layout()
     return _save_figure(fig, output_dir / "figure3_layerwise")
+
+
+def plot_figure4_layerwise_heatmap(
+    payload: dict[str, Any], output_dir: Path
+) -> dict[str, str]:
+    methods = _select_methods(payload)
+    if not methods:
+        raise ValueError("No methods available for Figure 4.")
+
+    fig, ax = plt.subplots(figsize=(7.4, 6.4))
+    layer_metrics_error: str | None = None
+    try:
+        heatmap_method = _select_heatmap_method(payload=payload, methods=methods)
+        mat, layers = _get_pairwise_disagreement_matrix(
+            payload=payload,
+            method=heatmap_method,
+        )
+        if mat.size == 0:
+            ax.text(
+                0.5,
+                0.5,
+                "No layer-pair metrics available",
+                ha="center",
+                va="center",
+            )
+            ax.set_axis_off()
+        else:
+            im = ax.imshow(mat, cmap="magma", vmin=0.0, vmax=1.0)
+            tick_positions = np.arange(len(layers))
+            ax.set_xticks(tick_positions)
+            ax.set_yticks(tick_positions)
+            ax.set_xticklabels(layers, rotation=45, ha="right")
+            ax.set_yticklabels(layers)
+            ax.set_xlabel("Layer")
+            ax.set_ylabel("Layer")
+            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label("Prediction Disagreement Rate")
+    except ValueError as exc:
+        layer_metrics_error = str(exc)
+        ax.set_axis_off()
+        fig.text(
+            0.5,
+            0.54,
+            "Layer-pair metrics unavailable in this result file.",
+            ha="center",
+            va="center",
+            fontsize=14,
+            fontweight="bold",
+        )
+        fig.text(
+            0.5,
+            0.46,
+            layer_metrics_error,
+            ha="center",
+            va="center",
+            fontsize=11,
+        )
+
+    fig.tight_layout()
+    return _save_figure(fig, output_dir / "figure4_layerwise_heatmap")
 
 
 def generate_comparison_figures(
@@ -449,10 +651,12 @@ def generate_comparison_figures(
     out1 = plot_figure1_al_curves(payload=payload, output_dir=output_dir)
     out2 = plot_figure2_ranking_stability(payload=payload, output_dir=output_dir)
     out3 = plot_figure3_layerwise(payload=payload, output_dir=output_dir)
+    out4 = plot_figure4_layerwise_heatmap(payload=payload, output_dir=output_dir)
     plt.close("all")
 
     return {
         "figure1_al_curves": out1,
         "figure2_ranking_stability": out2,
         "figure3_layerwise": out3,
+        "figure4_layerwise_heatmap": out4,
     }
