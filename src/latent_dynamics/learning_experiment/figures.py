@@ -15,12 +15,12 @@ def _configure_style() -> None:
         {
             "figure.dpi": 150,
             "savefig.dpi": 300,
-            "font.size": 15,
-            "axes.titlesize": 17,
-            "axes.labelsize": 15,
-            "legend.fontsize": 14,
-            "xtick.labelsize": 13,
-            "ytick.labelsize": 13,
+            "font.size": 16,
+            "axes.titlesize": 18,
+            "axes.labelsize": 18,
+            "legend.fontsize": 18,
+            "xtick.labelsize": 15,
+            "ytick.labelsize": 15,
             "axes.linewidth": 1.1,
             "lines.linewidth": 2.3,
             "lines.markersize": 5.5,
@@ -170,7 +170,9 @@ def _extract_stability_curve(
             method=method,
             metric_key=metric_key,
         )
-    return _stability_from_single_seed(payload=payload, method=method, metric_key=metric_key)
+    return _stability_from_single_seed(
+        payload=payload, method=method, metric_key=metric_key
+    )
 
 
 def _get_layer_auroc_series(
@@ -186,13 +188,16 @@ def _get_layer_auroc_series(
             )
         aggregate = layer_metrics_root.get("aggregate", {})
         if not isinstance(aggregate, dict) or method not in aggregate:
-            raise ValueError(
-                f"Missing aggregated layer metrics for method '{method}'."
-            )
+            raise ValueError(f"Missing aggregated layer metrics for method '{method}'.")
         metrics = aggregate[method]["test_auroc_by_layer"]
         layers = sorted(int(k) for k in metrics.keys())
-        y = np.asarray([float(metrics[str(li)]["mean"]) for li in layers], dtype=np.float64)
-        e = np.asarray([float(metrics[str(li)]["stderr"] or 0.0) for li in layers], dtype=np.float64)
+        y = np.asarray(
+            [float(metrics[str(li)]["mean"]) for li in layers], dtype=np.float64
+        )
+        e = np.asarray(
+            [float(metrics[str(li)]["stderr"] or 0.0) for li in layers],
+            dtype=np.float64,
+        )
         return np.asarray(layers, dtype=np.float64), y, e
 
     layer_metrics_root = payload.get("layer_metrics")
@@ -225,9 +230,7 @@ def _get_pairwise_disagreement_matrix(
             )
         aggregate = layer_metrics_root.get("aggregate", {})
         if not isinstance(aggregate, dict) or method not in aggregate:
-            raise ValueError(
-                f"Missing aggregated layer metrics for method '{method}'."
-            )
+            raise ValueError(f"Missing aggregated layer metrics for method '{method}'.")
         pair_rows = aggregate[method]["disagreement_by_layer_pair"]
     else:
         layer_metrics_root = payload.get("layer_metrics")
@@ -461,7 +464,9 @@ def plot_figure1_al_curves(payload: dict[str, Any], output_dir: Path) -> dict[st
 def plot_figure2_ranking_stability(
     payload: dict[str, Any], output_dir: Path
 ) -> dict[str, str]:
-    dynamic_methods = [m for m in payload.get("acquisitions", []) if m.startswith("dynamic_")]
+    dynamic_methods = [
+        m for m in payload.get("acquisitions", []) if m.startswith("dynamic_")
+    ]
     if not dynamic_methods:
         raise ValueError("No dynamic methods found for Figure 2.")
 
