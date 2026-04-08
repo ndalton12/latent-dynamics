@@ -66,6 +66,42 @@ SORRY_BENCH_CATEGORY_DESCRIPTIONS = [
 
 
 DATASET_REGISTRY: dict[str, DatasetSpec] = {
+    "beavertails30k/train": DatasetSpec(
+        path="PKU-Alignment/BeaverTails",
+        split="30k_train",
+        map_fn=lambda sample, i: {
+            "id": f"beavertails30k/train/{i}",
+            **sample,
+            "is_adversarial": False,
+        },
+    ),
+    "beavertails30k/test": DatasetSpec(
+        path="PKU-Alignment/BeaverTails",
+        split="30k_test",
+        map_fn=lambda sample, i: {
+            "id": f"beavertails30k/test/{i}",
+            **sample,
+            "is_adversarial": False,
+        },
+    ),
+    "beavertails330k/train": DatasetSpec(
+        path="PKU-Alignment/BeaverTails",
+        split="330k_train",
+        map_fn=lambda sample, i: {
+            "id": f"beavertails330k/train/{i}",
+            **sample,
+            "is_adversarial": False,
+        },
+    ),
+    "beavertails330k/test": DatasetSpec(
+        path="PKU-Alignment/BeaverTails",
+        split="330k_test",
+        map_fn=lambda sample, i: {
+            "id": f"beavertails330k/test/{i}",
+            **sample,
+            "is_adversarial": False,
+        },
+    ),
     "sorry_bench": DatasetSpec(
         path="sorry-bench/sorry-bench-202503",
         split="train",
@@ -77,18 +113,6 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
             "is_adversarial": False,
             "prompt_category": SORRY_BENCH_CATEGORY_DESCRIPTIONS[int(sample["category"]) - 1],
             "prompt_style": sample["prompt_style"],
-        },
-    ),
-    "xstest": DatasetSpec(
-        path="Paul/XSTest",
-        split="train",
-        map_fn=lambda sample, i: {
-            "id": f"xstest/{sample['id']}",
-            "prompt": sample["prompt"],
-            "is_safe": sample["label"] == "safe",
-            "is_adversarial": False,
-            "prompt_type": sample["type"],
-            "prompt_focus": sample["focus"],
         },
     ),
     "wildjailbreak/train/vanilla": DatasetSpec(
@@ -131,40 +155,16 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
             "is_adversarial": True,
         },
     ),
-    "beavertails330k/train": DatasetSpec(
-        path="PKU-Alignment/BeaverTails",
-        split="330k_train",
+    "xstest": DatasetSpec(
+        path="Paul/XSTest",
+        split="train",
         map_fn=lambda sample, i: {
-            "id": f"beavertails330k/train/{i}",
-            **sample,
+            "id": f"xstest/{sample['id']}",
+            "prompt": sample["prompt"],
+            "is_safe": sample["label"] == "safe",
             "is_adversarial": False,
-        },
-    ),
-    "beavertails330k/test": DatasetSpec(
-        path="PKU-Alignment/BeaverTails",
-        split="330k_test",
-        map_fn=lambda sample, i: {
-            "id": f"beavertails330k/test/{i}",
-            **sample,
-            "is_adversarial": False,
-        },
-    ),
-    "beavertails30k/train": DatasetSpec(
-        path="PKU-Alignment/BeaverTails",
-        split="30k_train",
-        map_fn=lambda sample, i: {
-            "id": f"beavertails30k/train/{i}",
-            **sample,
-            "is_adversarial": False,
-        },
-    ),
-    "beavertails30k/test": DatasetSpec(
-        path="PKU-Alignment/BeaverTails",
-        split="30k_test",
-        map_fn=lambda sample, i: {
-            "id": f"beavertails30k/test/{i}",
-            **sample,
-            "is_adversarial": False,
+            "prompt_type": sample["type"],
+            "prompt_focus": sample["focus"],
         },
     ),
 }
@@ -192,7 +192,7 @@ def load_dataset_from_spec(
         dataset = dataset.map(dataset_spec.map_fn, remove_columns=dataset.column_names, with_indices=True)
     # Downsample the dataset
     if max_samples is not None:
-        dataset = dataset.shuffle(seed=42).select(range(max_samples))
+        dataset = dataset.shuffle(seed=42).select(range(min(max_samples, len(dataset))))
     # Ensure certain columns exist
     for column in ["id", "prompt", "is_safe", "is_adversarial"]:
         if column not in dataset.column_names:
@@ -200,21 +200,24 @@ def load_dataset_from_spec(
 
     avg_prompt_length_chars = np.mean([len(sample["prompt"]) for sample in dataset])
     avg_prompt_length_words = np.mean([len(sample["prompt"].split()) for sample in dataset])
+    avg_response_length_chars = np.mean([len(sample.get("response", "")) for sample in dataset])
+    avg_response_length_words = np.mean([len(sample.get("response", "").split()) for sample in dataset])
     num_total = len(dataset)
     num_safe = sum(dataset["is_safe"])
     num_unsafe = num_total - num_safe
-    samples_safe = dataset.filter(lambda sample: sample["is_safe"]).select(range(5))
-    samples_unsafe = dataset.filter(lambda sample: not sample["is_safe"]).select(range(5))
+    samples_safe = dataset.filter(lambda sample: sample["is_safe"])
+    samples_unsafe = dataset.filter(lambda sample: not sample["is_safe"])
     print(
         f"Loaded dataset: {dataset_spec.path}"
-        f"\n  Number of samples:   {len(dataset)}"
-        f"\n    Safe:              {num_safe} ({num_safe / num_total * 100:.1f}%)"
-        f"\n    Unsafe:            {num_unsafe} ({num_unsafe / num_total * 100:.1f}%)"
-        f"\n  Columns:             {dataset.column_names}"
-        f"\n  Prompt length (avg): {avg_prompt_length_chars:.1f} chars, {avg_prompt_length_words:.1f} words"
+        f"\n  Number of samples:     {len(dataset)}"
+        f"\n    Safe:                {num_safe} ({num_safe / num_total * 100:.1f}%)"
+        f"\n    Unsafe:              {num_unsafe} ({num_unsafe / num_total * 100:.1f}%)"
+        f"\n  Columns:               {dataset.column_names}"
+        f"\n  Prompt length (avg):   {avg_prompt_length_chars:.1f} chars, {avg_prompt_length_words:.1f} words"
+        f"\n  Response length (avg): {avg_response_length_chars:.1f} chars, {avg_response_length_words:.1f} words"
         f"\n  Samples:"
-        f"\n    Safe:\n{'\n'.join(f'      - {sample}' for sample in samples_safe)}"
-        f"\n    Unsafe:\n{'\n'.join(f'      - {sample}' for sample in samples_unsafe)}"
+        f"\n    Safe:\n{'\n'.join(f'      - {sample}' for sample in samples_safe.select(range(min(5, len(samples_safe)))))}"
+        f"\n    Unsafe:\n{'\n'.join(f'      - {sample}' for sample in samples_unsafe.select(range(min(5, len(samples_unsafe)))))}"
     )
 
     return dataset
